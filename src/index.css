@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --cor-primaria: #0090fe;
+  --cor-secundaria: #001026;
+}
+
+html, body, #root { height: 100%; }
+body { @apply bg-slate-50 text-slate-900 antialiased; }
