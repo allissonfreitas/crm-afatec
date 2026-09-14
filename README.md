@@ -6,8 +6,15 @@ rodando em cima do **Supabase self-hosted** da VPS.
 > Este Supabase é compartilhado com outras aplicações, então o CRM vive inteiro no schema
 > **`crm`** — tabelas, enums, funções, views e RLS. O `public` não é tocado. O `auth.users`
 > é compartilhado (é um GoTrue só), e o CRM usa o gatilho `on_auth_user_created_crm`, de
-> nome próprio, que convive com os gatilhos dos outros apps. Quem entra de fato no CRM é
-> controlado por `crm.profiles` + RLS.
+> nome próprio, que convive com os gatilhos dos outros apps.
+>
+> Como o `auth.users` é compartilhado, **ter login não é ter acesso ao CRM**. Um cadastro
+> novo em qualquer outro app ganha uma linha em `crm.profiles` com `ativo = false`, e todas
+> as políticas exigem `crm.tem_acesso()`. O administrador libera quem é da equipe:
+>
+> ```sql
+> update crm.profiles set ativo = true, papel = 'vendedor' where email = 'fulano@afatec.net';
+> ```
 
 ## Stack
 
@@ -16,7 +23,7 @@ React 18 + TypeScript + Vite + Tailwind + Supabase JS. Tudo aberto e gratuito.
 ## Estrutura
 
 ```
-db/        migrações SQL (rodar na ordem 01 → 02 → 03 → 04)
+db/        migrações SQL (rodar na ordem 01 → 02 → 03 → 04 → 05)
 public/    logo e ícones da Afatec
 src/
   contexto/    sessão, perfil e identidade visual
@@ -35,6 +42,8 @@ No SQL Editor do seu Supabase, rodar **nesta ordem**:
 3. `db/03_seed.sql` — funil padrão, origens, motivos de perda e a identidade da Afatec
 4. `db/04_telefone_chave.sql` — chave de telefone tolerante ao nono dígito e as funções
    que a integração com o WhatsApp usa
+5. `db/05_acesso.sql` — trava de acesso: só entra no CRM quem tem linha **ativa** em
+   `crm.profiles`
 
 Depois crie o primeiro usuário em Authentication → Users e promova:
 

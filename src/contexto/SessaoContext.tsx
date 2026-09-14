@@ -5,6 +5,7 @@ import type { Configuracoes, Perfil } from '../lib/tipos'
 
 type Sessao = {
   carregando: boolean
+  perfilCarregado: boolean
   sessao: Session | null
   perfil: Perfil | null
   config: Configuracoes | null
@@ -20,6 +21,7 @@ export function SessaoProvider({ children }: { children: ReactNode }) {
   const [carregando, setCarregando] = useState(true)
   const [sessao, setSessao] = useState<Session | null>(null)
   const [perfil, setPerfil] = useState<Perfil | null>(null)
+  const [perfilCarregado, setPerfilCarregado] = useState(false)
   const [config, setConfig] = useState<Configuracoes | null>(null)
 
   async function carregarConfig() {
@@ -40,14 +42,21 @@ export function SessaoProvider({ children }: { children: ReactNode }) {
     if (!sessao?.user) {
       setPerfil(null)
       setConfig(null)
+      setPerfilCarregado(false)
       return
     }
+    setPerfilCarregado(false)
     supabase
       .from('profiles')
       .select('*')
       .eq('id', sessao.user.id)
       .maybeSingle()
-      .then(({ data }) => setPerfil((data as Perfil) ?? null))
+      .then(({ data }) => {
+        // sem linha ativa em crm.profiles o RLS não devolve nada:
+        // é um usuário de outro app do mesmo Supabase
+        setPerfil((data as Perfil) ?? null)
+        setPerfilCarregado(true)
+      })
     void carregarConfig()
   }, [sessao?.user?.id])
 
@@ -67,6 +76,7 @@ export function SessaoProvider({ children }: { children: ReactNode }) {
   const valor = useMemo<Sessao>(
     () => ({
       carregando,
+      perfilCarregado,
       sessao,
       perfil,
       config,
@@ -77,7 +87,7 @@ export function SessaoProvider({ children }: { children: ReactNode }) {
         await supabase.auth.signOut()
       },
     }),
-    [carregando, sessao, perfil, config],
+    [carregando, perfilCarregado, sessao, perfil, config],
   )
 
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>

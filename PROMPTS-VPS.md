@@ -34,12 +34,13 @@ do meu CRM no banco dele.
 3. Antes de mexer em qualquer coisa, faça um dump de segurança do banco atual em
    /root/backups/supabase-antes-do-crm-$(date +%F-%H%M).sql e me diga o tamanho do arquivo.
 
-4. Rode os quatro arquivos NESTA ORDEM, cada um com ON_ERROR_STOP ligado, parando no
+4. Rode os cinco arquivos NESTA ORDEM, cada um com ON_ERROR_STOP ligado, parando no
    primeiro erro:
       db/01_schema.sql
       db/02_rls.sql
       db/03_seed.sql
       db/04_telefone_chave.sql
+      db/05_acesso.sql
 
 5. Se algum der erro, PARE, não tente contornar, e me mostre a mensagem exata com o
    número da linha.
