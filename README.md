@@ -16,7 +16,7 @@ React 18 + TypeScript + Vite + Tailwind + Supabase JS. Tudo aberto e gratuito.
 ## Estrutura
 
 ```
-db/        migrações SQL (rodar na ordem 01 → 02 → 03)
+db/        migrações SQL (rodar na ordem 01 → 02 → 03 → 04)
 public/    logo e ícones da Afatec
 src/
   contexto/    sessão, perfil e identidade visual
@@ -33,6 +33,8 @@ No SQL Editor do seu Supabase, rodar **nesta ordem**:
 1. `db/01_schema.sql` — tabelas, triggers, views e a RPC da telefonia
 2. `db/02_rls.sql` — Row Level Security e buckets de storage
 3. `db/03_seed.sql` — funil padrão, origens, motivos de perda e a identidade da Afatec
+4. `db/04_telefone_chave.sql` — chave de telefone tolerante ao nono dígito e as funções
+   que a integração com o WhatsApp usa
 
 Depois crie o primeiro usuário em Authentication → Users e promova:
 

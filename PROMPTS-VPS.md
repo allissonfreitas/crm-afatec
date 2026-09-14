@@ -34,11 +34,12 @@ do meu CRM no banco dele.
 3. Antes de mexer em qualquer coisa, faça um dump de segurança do banco atual em
    /root/backups/supabase-antes-do-crm-$(date +%F-%H%M).sql e me diga o tamanho do arquivo.
 
-4. Rode os três arquivos NESTA ORDEM, cada um com ON_ERROR_STOP ligado, parando no
+4. Rode os quatro arquivos NESTA ORDEM, cada um com ON_ERROR_STOP ligado, parando no
    primeiro erro:
       db/01_schema.sql
       db/02_rls.sql
       db/03_seed.sql
+      db/04_telefone_chave.sql
 
 5. Se algum der erro, PARE, não tente contornar, e me mostre a mensagem exata com o
    número da linha.
@@ -50,6 +51,8 @@ comando mexendo no `public`, PARE e me avise antes de rodar.
 6. No fim, confirme rodando estas conferências e me mostre o resultado:
    - `select count(*) from crm.etapas;`     (esperado: 7)
    - `select count(*) from crm.origens;`    (esperado: 8)
+   - `select crm.chave_telefone('(31) 98888-7777') = crm.chave_telefone('553188887777');`
+     (esperado: true — é o teste do nono dígito)
    - `select nome_empresa, cor_primaria from crm.configuracoes;`
    - `select tablename from pg_tables where schemaname='crm' order by 1;`  (esperado: 17)
    - `select tablename from pg_tables where schemaname='crm' and not rowsecurity;`
