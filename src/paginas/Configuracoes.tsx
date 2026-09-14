@@ -32,13 +32,13 @@ export function Configuracoes() {
 
   async function enviarLogo(arquivo: File, coluna: 'logo_url' | 'logo_escura_url' | 'favicon_url') {
     setAviso(null)
-    const caminho = `marca/${coluna}-${Date.now()}-${arquivo.name.replace(/[^\w.-]/g, '_')}`
-    const { error } = await supabase.storage.from('marca').upload(caminho, arquivo, { upsert: true })
+    const caminho = `${coluna}-${Date.now()}-${arquivo.name.replace(/[^\w.-]/g, '_')}`
+    const { error } = await supabase.storage.from('crm-marca').upload(caminho, arquivo, { upsert: true })
     if (error) {
       setAviso(`Falha no upload: ${error.message}`)
       return
     }
-    const { data } = supabase.storage.from('marca').getPublicUrl(caminho)
+    const { data } = supabase.storage.from('crm-marca').getPublicUrl(caminho)
     campo(coluna, data.publicUrl)
     setAviso('Imagem enviada. Clique em Salvar para aplicar.')
   }

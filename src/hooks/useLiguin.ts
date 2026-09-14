@@ -33,7 +33,7 @@ export function useLiguin(meuRamal?: string | null) {
       .channel('liguin-entrada')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'chamadas' },
+        { event: '*', schema: 'crm', table: 'chamadas' },
         (payload) => {
           const nova = payload.new as Chamada | undefined
           const velha = payload.old as Partial<Chamada> | undefined

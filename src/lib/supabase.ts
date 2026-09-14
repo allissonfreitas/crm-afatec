@@ -9,7 +9,11 @@ if (!url || !anon) {
   )
 }
 
+// O CRM vive no schema `crm`, nao no `public` — que neste Supabase
+// pertence a outra aplicacao. Para a API REST responder, o schema `crm`
+// precisa estar em PGRST_DB_SCHEMAS no stack do Supabase.
 export const supabase = createClient(url, anon, {
+  db: { schema: 'crm' },
   auth: { persistSession: true, autoRefreshToken: true },
   realtime: { params: { eventsPerSecond: 10 } },
 })
