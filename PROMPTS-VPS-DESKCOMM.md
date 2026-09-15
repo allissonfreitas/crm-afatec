@@ -1,8 +1,14 @@
 # Subir o DeskcommCRM na VPS, com a marca Afatec
 
-Roteiro escrito em 15/09/2026 para colar no **Claude Code que roda dentro da VPS**.
+Roteiro escrito em 15/09/2026 para o **Claude Code do Allisson**, que alcança a VPS por SSH.
 Baseado no DeskcommCRM **v1.27.2** (`melgarafael/DeskcommCRM`, MIT), lido commit a commit,
 e no que já está de pé na VPS da Afatec.
+
+> **Revisão de 15/09/2026, depois do Bloco 0.** O diagnóstico rodou e mudou três coisas:
+> o Traefik do EasyPanel **não** roda em modo host (é serviço Swarm em bridge, na overlay
+> `easypanel`), os entrypoints dele se chamam **`http` e `https`** (não `web`/`websecure`),
+> e o acesso é **SSH não-interativo** — então o Bloco 3 foi reescrito para o modo `--yes`,
+> com o `.env` preenchido antes. O Bloco 0 virou registro do que foi apurado.
 
 > **Para o Allisson, antes de colar:** cada bloco abaixo é autocontido e tem como conferir
 > que deu certo. Cole um de cada vez, na ordem, e só siga para o próximo quando a
@@ -15,50 +21,42 @@ e no que já está de pé na VPS da Afatec.
 |---|---|
 | **Banco no Supabase Cloud (plano grátis)** | O `public` do Supabase da VPS é do **zapmax em produção**, e as 242 migrations do DeskcommCRM são escritas para `public`. Um segundo Supabase self-hosted comeria mais ~1 GB de RAM e o próprio guia do projeto diz que self-hosted "funciona, mas não é coberto". O plano grátis é free, com backup gerenciado. Limites a saber: **500 MB de banco** e o projeto **hiberna após 7 dias sem tráfego** (com WhatsApp ligado, não hiberna). |
 | **Domínio `crm.afatec.net`** | O CRM atual continua no ar em `crm-afatec.gddktt.easypanel.host` até você aprovar o novo. Nada é desligado nesta instalação. |
-| **Proxy: o Traefik do EasyPanel** | O kit detecta sozinho e publica o app por ele, sem subir o Caddy dele. Ninguém encosta no Traefik do EasyPanel. |
+| **Proxy: o Traefik do EasyPanel** | O app é publicado por ele, por label, na overlay `easypanel` (que é `attachable=true`). O Caddy do kit fica num profile desligado. Ninguém encosta no Traefik do EasyPanel. |
 | **WAHA com número NOVO** | O WhatsApp só aceita um pareamento por número. O chip do Agente Express está na Evolution API — parear o mesmo número no WAHA **derruba a Evolution**. |
 | **IA fica para depois** | O CRM sobe sem chave. Você cadastra pela tela depois (IA › Credenciais), e o OpenRouter tem modelos gratuitos. |
 | **Chamada de voz (WaCalls) DESLIGADA** | Vincula um segundo aparelho ao número por caminho não oficial — risco de banimento da conta. Nasce desligada e fica assim. |
 
 ---
 
-## Bloco 0 — Diagnóstico: a VPS aguenta?
+## Bloco 0 — Diagnóstico ✅ FEITO em 15/09/2026
 
-```
-Você está no Claude Code da VPS da Afatec. NÃO instale nada ainda. Este passo é só
-diagnóstico, e a resposta dele decide se seguimos.
+Rodado por SSH, só leitura. **Veredito: a VPS aguenta, com folga.**
 
-Quero subir o DeskcommCRM nesta VPS. Ele são 7 contêineres e, segundo o próprio
-projeto, os picos MEDIDOS são: app 335 MiB (teto 768m), worker 230 MiB (teto 512m),
-WAHA 893 MiB (teto 1280m), mais redis, srh, scheduler e o proxy. Na prática preciso
-de ~2,5 GB de RAM livre e ~10 GB de disco livre.
+| Item | Situação |
+|---|---|
+| RAM | 15 Gi total · 7,3 Gi usada · **8,3 Gi disponíveis** |
+| Swap | **já existe**: `/swapfile`, 4 GB |
+| Disco `/` | 193 G total · **120 G livres** |
+| Docker | 29.2.1 · Compose v5.0.2 · 50 contêineres no ar |
+| Pico teórico do DeskcommCRM | ~2,8 GB → sobrariam ~5,5 Gi |
 
-Faça o levantamento e me responda em texto, sem mudar nada:
+O que o diagnóstico achou sobre o proxy, e que muda o Bloco 3:
 
-1. RAM total, usada e disponível:            free -h
-2. Swap configurado:                         swapon --show
-3. Disco livre em / e em /var/lib/docker:    df -h / /var/lib/docker
-4. Consumo atual por contêiner:              docker stats --no-stream --format \
-                                             "table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}"
-5. Quem ocupa as portas 80 e 443:            ss -tlnp | grep -E ':80 |:443 '
-6. O Traefik do EasyPanel: nome do contêiner, se roda em --network host ou em bridge
-   própria, e o nome dessa rede:             docker ps --format '{{.Names}}\t{{.Image}}' | grep -i traefik
-                                             docker inspect <nome> --format '{{json .NetworkSettings.Networks}}'
-7. Versão do docker e se o compose v2 existe: docker --version && docker compose version
+- O Traefik é um **serviço Swarm** (`easypanel-traefik`, `traefik:3.6.7`), em
+  **bridge**, ligado à overlay **`easypanel`** (IP 10.11.0.24). **Não** é modo host.
+- As portas 80/443 saem publicadas em `PublishMode: host` — por isso o `ss` mostra
+  `docker-proxy` e não o Traefik direto.
+- A rede `easypanel` é `Driver=overlay Scope=swarm` **`Attachable=true`**: um contêiner de
+  docker-compose comum pode entrar nela. É o que a integração por label precisa.
+- Os entrypoints se chamam **`http`** (:80) e **`https`** (:443), **não** `web`/`websecure`.
+  O certresolver é `letsencrypt`.
+- `TRAEFIK_PROVIDERS_DOCKER=true` com `EXPOSEDBYDEFAULT=false`: labels são lidas, e nada
+  dos apps atuais é afetado, porque só sobe quem tiver `traefik.enable=true`.
 
-Depois me diga, com os números na mão:
-- Sobra RAM para mais ~2,5 GB? Se não sobra, quanto falta e o que está comendo.
-- Há swap? Se não houver e a RAM estiver apertada, proponha (sem executar) criar
-  um swapfile de 4 GB.
-- O Traefik do EasyPanel está em modo host ou em bridge própria? (isso muda a rede
-  que o instalador vai usar)
-
-NÃO instale, NÃO pare contêiner nenhum, NÃO mexa no Supabase, no n8n, na Evolution
-API nem no CRM que já está no ar em /opt/crm-afatec. Só relate.
-```
-
-**Como saber que deu certo:** você tem um relatório com os números, e uma resposta clara
-sobre sobrar ou não ~2,5 GB de RAM. Se não sobrar, pare aqui e me mande o relatório.
+> **Plano B conhecido**, se a rota por label der atrito com o Swarm: todos os apps standalone
+> da VPS (crm-afatec, zapmax, carousel, financeiro) já são roteados pelo **file provider**,
+> com um YAML em `/etc/easypanel/traefik/config/` apontando para `http://172.17.0.1:<porta>/`.
+> É o caminho validado nesta casa. Ver o **Bloco 3-B** no fim deste arquivo.
 
 ---
 
@@ -95,94 +93,150 @@ Este também é **seu**, e leva 3 minutos:
 
 1. Entre em [supabase.com](https://supabase.com) e crie um projeto novo na região
    **South America (São Paulo) — sa-east-1**. Guarde a senha do banco que ele pedir.
-2. Gere um token de conta em
-   [supabase.com/dashboard/account/tokens](https://supabase.com/dashboard/account/tokens).
-   Com ele o instalador configura sozinho os links dos e-mails de acesso (sem isso, o
-   "esqueci minha senha" chega apontando para `localhost:3000` e ninguém consegue entrar).
-
-> ⚠️ Esse token é chave mestra da sua conta Supabase. O instalador **não grava** ele em
-> disco — usa uma vez e some com o processo. Não cole esse token em chat nenhum, inclusive
-> aqui comigo: ele vai direto na VPS.
+2. **Não precisa gerar token de conta.** O instalador usaria esse token só para configurar
+   os links dos e-mails de acesso, e isso são dois campos que você preenche no painel no
+   Bloco 4. Como ele é chave mestra da conta inteira (cria e apaga projetos), deixar ele
+   fora da VPS é de graça — e nada aqui pede que você o cole em chat nenhum.
 
 3. Em **Settings → API**, copie: *Project URL*, *anon key*, *service_role key*.
 4. Em **Settings → Database → Connection string**, copie a do **Session pooler, modo URI**.
    > A *Direct connection* é IPv6-only e **não conecta de um VPS IPv4** — é o erro mais
    > comum dessa instalação.
 
-**Como saber que deu certo:** você tem as 4 credenciais e o token, e o projeto no painel do
-Supabase está com o status verde (`ACTIVE_HEALTHY`). Projeto recém-criado leva uns minutos.
+**Como saber que deu certo:** você tem as 4 credenciais e o projeto no painel do Supabase
+está verde (`ACTIVE_HEALTHY`). Projeto recém-criado leva alguns minutos para chegar lá.
+
+> As 4 credenciais vão do seu computador direto para o `.env` na VPS, por SSH. Não precisam
+> passar pelo chat do projeto — e a `service_role` em especial não deve.
 
 ---
 
-## Bloco 3 — Instalar o DeskcommCRM
+## Bloco 3 — Instalar o DeskcommCRM (modo não-interativo)
+
+O instalador tem um modo interativo que faz perguntas, e um modo `--yes` que lê tudo de um
+`.env` preenchido antes. **Por SSH usamos o `--yes`** — não há terminal para responder as
+perguntas, e um `read -r -p` num SSH não-interativo trava ou consome lixo do stdin.
+
+Preencher o `.env` na mão também resolve outro risco: os valores de Traefik que o
+diagnóstico já apurou entram declarados, em vez de dependerem da detecção automática.
 
 ```
-Vamos instalar o DeskcommCRM nesta VPS. Regras que valem o tempo todo:
+Vamos instalar o DeskcommCRM na VPS, por SSH, em modo NÃO-INTERATIVO. Regras que valem
+o tempo todo:
 
-  - NÃO pare nem reconfigure o Traefik do EasyPanel.
-  - NÃO toque no Supabase self-hosted desta VPS (o schema public é do zapmax em
-    produção), nem no n8n, nem na Evolution API.
+  - NÃO pare nem reconfigure o Traefik do EasyPanel (serviço Swarm easypanel-traefik).
+  - NÃO toque no Supabase self-hosted da VPS (o schema public é do zapmax em produção),
+    nem no n8n, nem na Evolution API.
   - NÃO desligue o CRM antigo em /opt/crm-afatec — ele fica no ar em paralelo.
-  - O banco deste CRM novo é um projeto no Supabase CLOUD, não o daqui.
+  - O banco deste CRM novo é um projeto no Supabase CLOUD, não o da VPS.
+  - Não rode "docker compose up -d caddy" NUNCA: nomear o serviço liga o profile dele e
+    ele vai disputar as portas 80/443 com o EasyPanel.
 
-Passos:
+PASSO 1 — Clonar, fora dos caminhos existentes:
 
-1. Clone o projeto fora dos caminhos existentes:
+  cd /opt
+  git clone --depth 1 https://github.com/melgarafael/DeskcommCRM.git deskcommcrm
+  cd /opt/deskcommcrm
+  cp .env.hostgator.example .env
+  chmod 600 .env
 
-     cd /opt
-     git clone --depth 1 https://github.com/melgarafael/DeskcommCRM.git deskcommcrm
-     cd /opt/deskcommcrm
+PASSO 2 — Preencher o .env. Use um heredoc com ASPAS SIMPLES no delimitador (<<'EOF'),
+para o shell não interpolar nada, e escreva as chaves do Supabase a partir dos valores que
+eu vou te passar por um caminho seguro (nunca colados no chat do projeto).
 
-2. Rode o instalador em modo interativo. Ele detecta sozinho que esta VPS já tem um
-   Traefik e grava REVERSE_PROXY=traefik:
+Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
 
-     bash hostgator-setup-kit/install.sh
+  DOMAIN=crm.afatec.net
+  ACME_EMAIL=<e-mail do Allisson>
+  NEXT_PUBLIC_APP_URL=https://crm.afatec.net
+  NEXT_PUBLIC_ADMIN_URL=https://crm.afatec.net
 
-   Se ele PERGUNTAR se é o Traefik que atende o domínio (ele pergunta quando o proxy
-   roda em --network host, que é o caso da Hostinger), responda que SIM e me mostre o
-   que ele encontrou antes de confirmar.
+  # Traefik do EasyPanel — valores APURADOS no Bloco 0. Declarados de propósito:
+  # preenchidos aqui, o instalador NÃO tenta adivinhar.
+  REVERSE_PROXY=traefik
+  TRAEFIK_NETWORK=easypanel
+  TRAEFIK_ENTRYPOINT=https
+  TRAEFIK_ENTRYPOINT_HTTP=http
+  TRAEFIK_CERTRESOLVER=letsencrypt
 
-3. Responda as perguntas assim:
+  # Supabase Cloud
+  NEXT_PUBLIC_SUPABASE_URL=<Project URL>
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
+  SUPABASE_SERVICE_ROLE_KEY=<service_role key>
+  SUPABASE_DB_URL=<connection string do SESSION POOLER, modo URI>
 
-     Domínio do CRM .................... crm.afatec.net
-     Seu e-mail (avisos de SSL) ........ <o e-mail do Allisson>
-     Imagem Docker do app .............. Enter (aceita a última versão publicada)
-     Supabase Project URL .............. <Project URL do Supabase Cloud>
-     Supabase anon key ................. <anon key>
-     Supabase service_role key ......... <service_role key>
-     Supabase connection string ........ <a do SESSION POOLER, modo URI>
-     Token de acesso do Supabase ....... <o token de conta> (não fica salvo)
-     Chave de IA ....................... Enter (pula — cadastramos depois pela tela)
-     E-mail do primeiro admin .......... <e-mail do Allisson>
-     Senha do primeiro admin ........... <senha forte, no mínimo 8 caracteres>
-     Nome na interface ................. Afatec CRM
-     Idioma ............................ 1 (Português)
-     Cor da marca em hex ............... #0090FE
-     E-mail de suporte ................. Enter (pula)
-     Chave da Resend ................... Enter (pula)
-     Remetente dos e-mails ............. Enter (pula)
+  # Primeiro admin
+  OWNER_EMAIL=<e-mail do Allisson>
+  OWNER_PASSWORD=<senha forte, no mínimo 8 caracteres>
 
-   Na tela de conferência, confira item por item ANTES de dar Enter — principalmente
-   o domínio e a connection string.
+  # Marca da Afatec
+  APP_NAME=Afatec CRM
+  APP_LOCALE=pt-BR
+  APP_ACCENT_HEX=#0090FE
+  APP_LOGO_URL=https://crm-afatec.gddktt.easypanel.host/logo-afatec.png
 
-4. Quando terminar, me mostre:
+  # IA fica para depois (cadastro pela tela, em IA › Credenciais)
+  ANTHROPIC_API_KEY=
+  # Chamada de voz desligada — não mexer
+  COMPOSE_PROFILES=
 
-     cd /opt/deskcommcrm
-     grep -E '^(DOMAIN|REVERSE_PROXY|TRAEFIK_NETWORK|TRAEFIK_ENTRYPOINT|TRAEFIK_CERTRESOLVER|APP_IMAGE|APP_NAME|APP_ACCENT_HEX|COMPOSE_PROFILES)=' .env
-     docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml ps
+⚠️ APP_LOCALE **não vem** no .env.hostgator.example, e em modo --yes o instalador aborta
+com "Falta APP_LOCALE" se ela não existir. É por isso que ela está na lista acima.
 
-   Espero ver REVERSE_PROXY=traefik, TRAEFIK_NETWORK com o nome da rede do Traefik do
-   EasyPanel, COMPOSE_PROFILES vazio (chamada de voz desligada) e os contêineres app,
-   worker, waha, redis, srh e scheduler de pé — sem nenhum caddy.
+⚠️ A connection string tem que ser a do **Session pooler, modo URI**. A "Direct connection"
+é IPv6-only e não conecta de um VPS IPv4 — é o erro mais comum desta instalação.
 
-Se o TRAEFIK_ENTRYPOINT/TRAEFIK_CERTRESOLVER do EasyPanel não forem
-"websecure"/"letsencrypt", corrija no .env e suba de novo com os DOIS arquivos de
-compose. Não rode "docker compose up -d caddy" nunca: nomear o serviço liga o profile
-dele e ele vai brigar pelas portas 80/443 com o EasyPanel.
+PASSO 3 — Conferir o .env antes de rodar (mascare os segredos na saída):
+
+  cd /opt/deskcommcrm
+  grep -E '^(DOMAIN|ACME_EMAIL|NEXT_PUBLIC_APP_URL|REVERSE_PROXY|TRAEFIK_|APP_NAME|APP_LOCALE|APP_ACCENT_HEX|APP_LOGO_URL|COMPOSE_PROFILES|OWNER_EMAIL)=' .env
+  grep -cE '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_URL|OWNER_PASSWORD)=.+' .env
+
+  A segunda linha tem que devolver 5. Se devolver menos, alguma credencial ficou vazia.
+
+PASSO 4 — Instalar:
+
+  cd /opt/deskcommcrm
+  bash hostgator-setup-kit/install.sh --yes 2>&1 | tail -60
+
+  O instalador gera sozinho os segredos que faltam (INTERNAL_SECRET, CPF_ENCRYPTION_KEY,
+  AI_CRED_AES_KEY, WAHA_API_KEY + hash, WAHA_HMAC_SECRET, SRH_TOKEN e os demais), aplica
+  o supabase/baseline.sql no banco, cria o primeiro admin e instala o cron do
+  event-log-drain. Não invente nenhum desses valores à mão.
+
+  Se ele parar dizendo que não identificou o dono das portas 80/443, NÃO force nada:
+  o REVERSE_PROXY=traefik já está declarado no .env, então me mostre a mensagem inteira
+  antes de qualquer outra coisa.
+
+PASSO 5 — Conferir o resultado:
+
+  cd /opt/deskcommcrm
+  grep -E '^(REVERSE_PROXY|TRAEFIK_NETWORK|TRAEFIK_ENTRYPOINT|TRAEFIK_CERTRESOLVER|APP_IMAGE|WORKER_IMAGE|SCHEDULER_IMAGE|COMPOSE_PROFILES)=' .env
+  docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml ps
+  docker inspect deskcommcrm-app-1 --format '{{json .NetworkSettings.Networks}}' | tr ',' '\n' | grep -o '"[a-z_-]*":' | head
+
+Espero ver:
+  - REVERSE_PROXY=traefik, TRAEFIK_NETWORK=easypanel, TRAEFIK_ENTRYPOINT=https
+  - COMPOSE_PROFILES vazio (chamada de voz desligada)
+  - app, worker, waha, redis, srh e scheduler de pé — e NENHUM caddy
+  - o contêiner do app conectado nas DUAS redes: a internal do projeto e a easypanel
+
+PASSO 6 — Provar que o domínio responde pelo Traefik, e não pela página de erro do painel:
+
+  curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://crm.afatec.net/
+  curl -sS -I https://crm.afatec.net/ | head -5
+
+  200 (ou 307 para /login) é o que queremos. Se vier a página de erro do EasyPanel, o
+  label caiu num entrypoint que não existe — confira TRAEFIK_ENTRYPOINT=https no .env,
+  suba de novo com os DOIS arquivos de compose, e se persistir vamos para o Bloco 3-B.
+
+E confirme que nada mais na VPS foi afetado:
+
+  docker ps --format '{{.Names}}\t{{.Status}}' | grep -Ei 'supabase|evolution|n8n|crm-afatec|traefik'
 ```
 
-**Como saber que deu certo:** os 6 contêineres de pé, nenhum `caddy`, e
-`https://crm.afatec.net` abrindo a tela de login com cadeado válido.
+**Como saber que deu certo:** os 6 contêineres de pé, nenhum `caddy`, o app nas duas redes,
+e `https://crm.afatec.net` devolvendo a tela de login com cadeado válido.
 
 ---
 
@@ -208,16 +262,26 @@ dá para apontar direto para ela — é uma URL pública e gratuita:
    A cor tem que ser cerquilha + 6 dígitos. "#0090FE" funciona; "#09F" ou "0090FE"
    pintam a tela mas quebram o e-mail de acesso.
 
-3. Aplique e suba a marca dos e-mails de acesso (assunto, corpo, cor do botão, Site URL
-   e Redirect URLs do GoTrue):
+3. Aplique:
 
      cd /opt/deskcommcrm
      docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml up -d
-     bash hostgator-setup-kit/marca-emails.sh
-
-4. Me mostre o resultado do marca-emails.sh e confirme que ele configurou o Site URL
-   como https://crm.afatec.net e o Redirect como https://crm.afatec.net/auth/confirm.
 ```
+
+4. **Site URL e Redirect URLs — faça no painel do Supabase, à mão.** É o passo que decide
+   se o "esqueci minha senha", a confirmação de conta e o aceite de convite chegam com link
+   que funciona. Ele nasce como `http://localhost:3000`. Em
+   **Authentication → URL Configuration** do seu projeto:
+
+   - **Site URL:** `https://crm.afatec.net`
+   - **Redirect URLs:** `https://crm.afatec.net/auth/confirm`
+
+   > Existe um script que faz isso sozinho e ainda deixa os e-mails com a marca da Afatec —
+   > `hostgator-setup-kit/marca-emails.sh` —, mas ele **exige o token de conta do Supabase**,
+   > que é chave mestra. Dois campos no painel resolvem a parte que importa sem o token
+   > sair do lugar. Se você quiser os e-mails com a marca depois, rode numa linha só, do
+   > seu terminal, sem gravar nada:
+   > `ssh root@VPS "cd /opt/deskcommcrm && SUPABASE_ACCESS_TOKEN=sbp_... bash hostgator-setup-kit/marca-emails.sh"`
 
 **Como saber que deu certo:** a tela de login mostra a logo da Afatec, o azul da marca
 aparece nos botões, e o `marca-emails.sh` terminou sem erro.
@@ -303,5 +367,49 @@ mensagem enviada para ele cai no Inbox.
    arquivo para um storage externo fecha o buraco — VPS que morre leva o backup junto.
 4. **Gire a `service_role` do Supabase self-hosted.** Ela está em texto puro nos arquivos
    deste projeto. Nada a ver com o DeskcommCRM, mas continua pendente.
-5. **Swap de 4 GB**, se o Bloco 0 mostrar RAM apertada. Sem swap, o OOM killer escolhe a
-   vítima por quem cresceu mais rápido — pode ser o zapmax em produção, não o CRM novo.
+5. **Tetos de memória já vêm no compose** (app 768m, worker 512m, WAHA 1280m) e a VPS tem
+   swap de 4 GB — nada a fazer aqui. Vale só lembrar que os seus outros contêineres rodam
+   **sem teto**: o elasticsearch do Postae (709 MB) e o n8n (670 MB) podem crescer sem
+   limite, e o OOM killer escolhe a vítima por quem cresceu mais rápido, não por
+   importância. Pôr `mem_limit` neles é um seguro barato para o zapmax em produção.
+
+---
+
+## Bloco 3-B — Plano B: rotear pelo file provider (só se o label não pegar)
+
+Se o app subir saudável por dentro mas `https://crm.afatec.net` devolver a página de erro
+do EasyPanel, é a rota por label que não pegou. O caminho já validado nesta VPS é o file
+provider, o mesmo que hoje atende crm-afatec, zapmax, carousel e financeiro.
+
+```
+A rota por label não pegou. Vamos pelo file provider, como os outros apps standalone
+desta VPS. NÃO mexa nos YAMLs que já existem em /etc/easypanel/traefik/config/.
+
+1. Publique a porta do app no host, só no loopback do docker0. Crie
+   /opt/deskcommcrm/docker-compose.easypanel.yml com:
+
+     services:
+       app:
+         ports:
+           - "127.0.0.1:8099:3000"
+
+   Antes disso, confirme que a 8099 está livre:  ss -tlnp | grep ':8099 '
+   (a 8098 é do CRM antigo — não use).
+
+2. Suba com os TRÊS arquivos:
+
+     cd /opt/deskcommcrm
+     docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml \
+       -f docker-compose.easypanel.yml up -d
+
+3. Crie /etc/easypanel/traefik/config/crm-afatec-deskcomm.yaml no mesmo formato dos
+   YAMLs que já estão lá (copie a estrutura de um existente, não invente), com router em
+   Host(`crm.afatec.net`), entrypoint https, certresolver letsencrypt, e serviço
+   apontando para http://172.17.0.1:8099/.
+
+4. O Traefik recarrega o diretório sozinho. Confirme:
+
+     curl -sS -o /dev/null -w '%{http_code}\n' https://crm.afatec.net/
+
+5. Me mostre o YAML que você escreveu ANTES de salvar, e a saída do curl depois.
+```
