@@ -23,7 +23,8 @@ React 18 + TypeScript + Vite + Tailwind + Supabase JS. Tudo aberto e gratuito.
 ## Estrutura
 
 ```
-db/        migrações SQL (rodar na ordem 01 → 02 → 03 → 04 → 05)
+db/        migrações SQL (rodar na ordem 01 → 02 → 03 → 04 → 05; 06 e 07 só com a
+           integração do WhatsApp)
 public/    logo e ícones da Afatec
 src/
   contexto/    sessão, perfil e identidade visual
@@ -44,6 +45,15 @@ No SQL Editor do seu Supabase, rodar **nesta ordem**:
    que a integração com o WhatsApp usa
 5. `db/05_acesso.sql` — trava de acesso: só entra no CRM quem tem linha **ativa** em
    `crm.profiles`
+
+Os dois seguintes são só para a integração com o Agente Express, e podem esperar:
+
+6. `db/06_integracao.sql` — o que o agente do WhatsApp chama: conversa vira cliente,
+   atividade e oportunidade; chamada de voz vira tarefa de retorno
+7. `db/07_papel_integracao.sql` — papel `crm_integracao`, que executa só essas três
+   funções, para o agente não precisar da `service_role`
+
+Os prompts prontos estão em `docs/PROMPT-INTEGRACAO-EXPRESS.md`.
 
 Depois crie o primeiro usuário em Authentication → Users e promova:
 

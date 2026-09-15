@@ -42,6 +42,9 @@ do meu CRM no banco dele.
       db/04_telefone_chave.sql
       db/05_acesso.sql
 
+   Os arquivos 06 e 07 são da integração com o WhatsApp e têm prompt próprio em
+   docs/PROMPT-INTEGRACAO-EXPRESS.md. Não rode agora.
+
 5. Se algum der erro, PARE, não tente contornar, e me mostre a mensagem exata com o
    número da linha.
 
