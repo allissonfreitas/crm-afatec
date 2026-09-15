@@ -60,30 +60,54 @@ O que o diagnóstico achou sobre o proxy, e que muda o Bloco 3:
 
 ---
 
-## Bloco 1 — DNS do `crm.afatec.net`
+## Bloco 1 — DNS do `crm.afatec.net` ⏳ AGUARDA O CLOUDFLARE
 
-Este passo é **seu**, no painel do Cloudflare, não do agente:
+**Estado em 15/09/2026: reprovado.** O `crm.afatec.net` está com o proxy laranja ligado —
+o A responde `104.21.43.197` e `172.67.184.173` (Cloudflare), existe um AAAA do Cloudflare,
+e um GET devolve 404 com `server: cloudflare`. Comparação útil: o `n8nafatec.afatec.net`
+resolve para `76.13.98.43`, direto na VPS. É esse o padrão que o `crm` precisa seguir.
 
-1. No DNS do `afatec.net`, crie (ou edite) um registro **A** para `crm` apontando para o
-   **IP da VPS**.
-2. **Desligue o proxy do Cloudflare nesse registro** — a nuvem tem que ficar **cinza**, não
-   laranja. Com a nuvem laranja o Let's Encrypt não consegue validar o domínio pelo
-   Traefik e o HTTPS nunca é emitido.
+**O que fazer no painel do Cloudflare** (é ação sua, não do agente):
 
-Depois, no agente da VPS:
+1. Registro **A** de `crm` → **`76.13.98.43`**, com a **nuvem cinza (DNS only)**. Com a
+   laranja, o Let's Encrypt não valida e o HTTPS nunca é emitido.
+2. **Cuide do AAAA.** O Let's Encrypt **prefere IPv6 quando existe registro AAAA**. Se o A
+   ficar cinza mas sobrar um AAAA apontando para o Cloudflare, o desafio HTTP-01 sai por
+   IPv6, não chega no Traefik e o certificado falha — com sintoma confuso, porque pelo
+   navegador em IPv4 tudo parece certo. Esse AAAA provavelmente é gerado pelo próprio
+   proxy e some com a nuvem cinza, mas **confirme**: depois da mudança o AAAA tem que vir
+   **vazio**, ou apontar para **`2a02:4780:4:e059::1`**, que é o IPv6 desta VPS (o Traefik
+   já escuta em `[::]:80` e `[::]:443`, então funcionaria).
+
+Depois, no agente:
 
 ```
-Confira se o DNS do CRM novo já está apontando para esta VPS:
+Confira se o DNS do CRM novo já aponta para esta VPS:
 
-  dig +short crm.afatec.net
-  curl -s ifconfig.me ; echo
+  dig +short A    crm.afatec.net
+  dig +short AAAA crm.afatec.net
+  curl -4 -s ifconfig.me ; echo
 
-Os dois têm que devolver o MESMO IP. Se o dig devolver um IP da Cloudflare
-(faixas 104.x, 172.67.x, 188.114.x) é porque o proxy laranja está ligado — me avise
-que eu desligo lá. Não siga enquanto os dois IPs não baterem.
+Critério:
+  - o A tem que devolver exatamente o mesmo IP do curl -4 (76.13.98.43)
+  - o AAAA tem que vir VAZIO, ou 2a02:4780:4:e059::1 (o IPv6 desta VPS)
+  - se o A devolver 104.x, 172.67.x ou 188.114.x, o proxy laranja ainda está ligado
+
+⚠️ Use `dig +short A` e `curl -4`, com as duas flags. Esta VPS tem IPv6 (faixa Hostinger)
+e o curl prefere IPv6 quando existe: sem o -4 ele devolve 2a02:4780:4:e059::1, que nunca
+vai bater com o registro A, e a verificação reprova um DNS que já está certo.
+
+Confirme também que o Traefik responde pelo domínio antes de o CRM existir:
+
+  curl -sS -o /dev/null -w '%{http_code}\n' http://crm.afatec.net/
+
+Um 404 do Traefik (sem o header "server: cloudflare") é o esperado aqui: significa que a
+requisição chegou na VPS e ainda não há router para esse Host. É exatamente o que o
+Bloco 3 vai preencher.
 ```
 
-**Como saber que deu certo:** `dig +short crm.afatec.net` devolve exatamente o IP da VPS.
+**Como saber que deu certo:** o A devolve `76.13.98.43`, o AAAA vem vazio ou com o IPv6
+da VPS, e o GET em `http://crm.afatec.net/` não traz mais `server: cloudflare`.
 
 ---
 
@@ -148,6 +172,8 @@ Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
 
   DOMAIN=crm.afatec.net
   ACME_EMAIL=<e-mail do Allisson>
+  # as duas abaixo o instalador REESCREVE a partir do DOMAIN — deixe assim mesmo,
+  # é só para o arquivo ficar coerente se alguém ler antes de rodar
   NEXT_PUBLIC_APP_URL=https://crm.afatec.net
   NEXT_PUBLIC_ADMIN_URL=https://crm.afatec.net
 
@@ -182,6 +208,10 @@ Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
 
 ⚠️ APP_LOCALE **não vem** no .env.hostgator.example, e em modo --yes o instalador aborta
 com "Falta APP_LOCALE" se ela não existir. É por isso que ela está na lista acima.
+
+> **Os nomes destas chaves foram conferidos contra a v1.27.2**, uma a uma, no
+> `.env.hostgator.example`, no `install.sh` e nos dois composes: todas existem e são lidas.
+> A única ausente do template é a `APP_LOCALE` — por isso o aviso acima.
 
 ⚠️ A connection string tem que ser a do **Session pooler, modo URI**. A "Direct connection"
 é IPv6-only e não conecta de um VPS IPv4 — é o erro mais comum desta instalação.
