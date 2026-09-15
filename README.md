@@ -54,6 +54,28 @@ update crm.profiles set papel = 'admin' where email = 'seu@email.com';
 E exponha o schema na API REST: acrescente `crm` a `PGRST_DB_SCHEMAS` no stack do
 Supabase e reinicie o serviço REST. Sem isso o app recebe 404 em tudo.
 
+## No ar
+
+https://crm-afatec.gddktt.easypanel.host — publicado em 14/09/2026 na VPS.
+
+Servido por um container `nginx:alpine` chamado `crm-afatec` na porta 8098, apontando para
+`/opt/crm-afatec/dist`, com `try_files $uri $uri/ /index.html` (é uma SPA: sem esse
+fallback, recarregar em `/clientes/<id>` dá 404). O roteamento fica em
+`/etc/easypanel/traefik/config/crm-afatec.yaml`, no mesmo padrão dos outros estáticos da VPS.
+
+Para publicar uma versão nova:
+
+```bash
+cd /opt/crm-afatec && git pull && npm ci && npm run build
+```
+
+O nginx serve `dist/` direto do disco, então não precisa recriar o container.
+
+O domínio próprio `crm.afatec.net` está preparado mas inerte em
+`crm-afatec-dominio-proprio.yaml.pending`: o DNS ainda aponta para o Cloudflare. Quando
+virar um A record direto para a VPS (DNS-only), basta renomear o arquivo tirando o
+`.pending`.
+
 ## Rodar o app
 
 ```bash
