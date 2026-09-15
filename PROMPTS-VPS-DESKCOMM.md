@@ -99,15 +99,19 @@ vai bater com o registro A, e a verificação reprova um DNS que já está certo
 
 Confirme também que o Traefik responde pelo domínio antes de o CRM existir:
 
-  curl -sS -o /dev/null -w '%{http_code}\n' http://crm.afatec.net/
+  curl -4 -sS -o /dev/null -D- -m 15 http://crm.afatec.net/ | head -8
 
-Um 404 do Traefik (sem o header "server: cloudflare") é o esperado aqui: significa que a
-requisição chegou na VPS e ainda não há router para esse Host. É exatamente o que o
-Bloco 3 vai preencher.
+Esperado: **301 para https**, e NENHUM header "server: cloudflare" — é o redirect padrão do
+Traefik do EasyPanel, o mesmo dos outros apps dele. Em https o domínio vai devolver **404
+com um certificado autoassinado `CN=Easypanel`**, e isso também é o certo agora: o tráfego
+chega no Traefik, mas ainda não existe router para este Host. O Bloco 3 é que registra o
+router, e o Let's Encrypt emite o certificado de verdade.
 ```
 
 **Como saber que deu certo:** o A devolve `76.13.98.43`, o AAAA vem vazio ou com o IPv6
-da VPS, e o GET em `http://crm.afatec.net/` não traz mais `server: cloudflare`.
+da VPS, e o `http://crm.afatec.net/` responde 301 sem `server: cloudflare`.
+
+✅ **Aprovado em 15/09/2026**: A em `76.13.98.43`, AAAA vazio, 301 pelo Traefik do EasyPanel.
 
 ---
 
@@ -256,9 +260,15 @@ PASSO 6 — Provar que o domínio responde pelo Traefik, e não pela página de 
   curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://crm.afatec.net/
   curl -sS -I https://crm.afatec.net/ | head -5
 
-  200 (ou 307 para /login) é o que queremos. Se vier a página de erro do EasyPanel, o
-  label caiu num entrypoint que não existe — confira TRAEFIK_ENTRYPOINT=https no .env,
-  suba de novo com os DOIS arquivos de compose, e se persistir vamos para o Bloco 3-B.
+  200 (ou 307 para /login) é o que queremos, com certificado do Let's Encrypt.
+
+  ⚠️ NÃO confunda o antes com o depois. ANTES da instalação, este mesmo domínio já devolvia
+  404 com certificado autoassinado CN=Easypanel — é o comportamento normal de um Host sem
+  router, e foi o estado aprovado no Bloco 1. O que caracteriza problema é esse 404
+  CONTINUAR depois de os contêineres estarem de pé: aí sim o label caiu num entrypoint que
+  não existe, ou o Traefik não está enxergando o contêiner. Confira TRAEFIK_ENTRYPOINT=https
+  no .env e que o app está na rede easypanel (PASSO 5), suba de novo com os DOIS arquivos de
+  compose, e se persistir vamos para o Bloco 3-B.
 
 E confirme que nada mais na VPS foi afetado:
 
