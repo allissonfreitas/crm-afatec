@@ -45,7 +45,21 @@ export function useLiguin(meuRamal?: string | null) {
           })
         },
       )
-      .subscribe()
+      // Sem este retorno de status, uma assinatura que falha e' silenciosa:
+      // a tela fica parada e nao ha como saber se o problema foi o banco, o
+      // Realtime ou o navegador. Com ele, o Console responde a pergunta.
+      .subscribe((status, erro) => {
+        // eslint-disable-next-line no-console
+        console.log('[liguin] assinatura:', status, erro ?? '')
+        if (typeof window !== 'undefined') {
+          ;(window as unknown as Record<string, unknown>).__liguin = {
+            status,
+            erro: erro ? String(erro) : null,
+            ramal: meuRamal ?? null,
+            em: new Date().toISOString(),
+          }
+        }
+      })
 
     return () => {
       vivo = false
