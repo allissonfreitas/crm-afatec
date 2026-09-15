@@ -571,7 +571,34 @@ from crm.chamadas
 where iniciada_em >= date_trunc('day', now() at time zone 'America/Sao_Paulo')
 group by 1 order by 1;
 
--- Realtime do "liguin": publica a tabela de chamadas
-do $$ begin
-  alter publication supabase_realtime add table crm.chamadas;
-exception when duplicate_object then null; when undefined_object then null; end $$;
+-- Realtime do "liguin": publica a tabela de chamadas.
+-- Sem esta publicacao o pop-up de ligacao nunca aparece, entao aqui nada de
+-- erro engolido em silencio: se no fim a tabela nao estiver publicada, o
+-- script para e diz o porque.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication where pubname = 'supabase_realtime'
+  ) then
+    create publication supabase_realtime;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+     where pubname = 'supabase_realtime'
+       and schemaname = 'crm'
+       and tablename = 'chamadas'
+  ) then
+    alter publication supabase_realtime add table crm.chamadas;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+     where pubname = 'supabase_realtime'
+       and schemaname = 'crm'
+       and tablename = 'chamadas'
+  ) then
+    raise exception
+      'crm.chamadas nao entrou na publication supabase_realtime; o liguin nao vai funcionar';
+  end if;
+end $$;
