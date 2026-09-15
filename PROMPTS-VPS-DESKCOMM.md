@@ -19,7 +19,7 @@ e no que já está de pé na VPS da Afatec.
 
 | Decisão | Por quê |
 |---|---|
-| **Banco no Supabase Cloud (plano grátis)** | O `public` do Supabase da VPS é do **zapmax em produção**, e as 242 migrations do DeskcommCRM são escritas para `public`. Um segundo Supabase self-hosted comeria mais ~1 GB de RAM e o próprio guia do projeto diz que self-hosted "funciona, mas não é coberto". O plano grátis é free, com backup gerenciado. Limites a saber: **500 MB de banco** e o projeto **hiberna após 7 dias sem tráfego** (com WhatsApp ligado, não hiberna). |
+| **Banco: EM REVISÃO (15/09/2026)** | O roteiro foi escrito para o **Supabase Cloud grátis**, mas as duas razões que eu dei para descartar o Supabase da VPS estavam erradas: **não há exigência de PG 17** (o CI do projeto roda em PG 15) e o baseline **não faz revoke em `public`**. A análise dos três caminhos — Cloud, o Supabase da VPS junto com o zapmax, ou um segundo Supabase self-hosted — está em `SUPABASE-SELFHOST-OU-CLOUD.md`. **Enquanto ele não escolher, os Blocos 2 e 3 ficam parados.** |
 | **Domínio `crm.afatec.net`** | O CRM atual continua no ar em `crm-afatec.gddktt.easypanel.host` até você aprovar o novo. Nada é desligado nesta instalação. |
 | **Proxy: o Traefik do EasyPanel** | O app é publicado por ele, por label, na overlay `easypanel` (que é `attachable=true`). O Caddy do kit fica num profile desligado. Ninguém encosta no Traefik do EasyPanel. |
 | **WAHA com número NOVO** | O WhatsApp só aceita um pareamento por número. O chip do Agente Express está na Evolution API — parear o mesmo número no WAHA **derruba a Evolution**. |
