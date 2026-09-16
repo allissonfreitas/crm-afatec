@@ -116,7 +116,7 @@ da VPS, e o `http://crm.afatec.net/` responde 301 sem `server: cloudflare`.
 
 ---
 
-## Bloco 2 — Preparar o Supabase da VPS
+## Bloco 2 — Preparar o Supabase da VPS ✅ CONCLUÍDO em 16/09/2026
 
 O CRM vai usar o Supabase que já está de pé (`supb.afatec.net`, API em
 `zapmaxapi.afatec.net`), no schema `public`, que ficou livre com a saída do zapmax.
@@ -292,8 +292,10 @@ em 16/09/2026:
 
   (1) O `supabase-db` NÃO publica porta nenhuma no host, e vive numa rede própria
       (172.19.0.9). Um container do bridge padrão não alcança esse IP — testado.
-  (2) Existe um **PostgreSQL 16 NATIVO do host** ouvindo na 5432. Então
-      `172.17.0.1:5432` conecta no banco ERRADO, e o baseline do CRM iria para lá.
+  (2) Existe um **PostgreSQL 16 NATIVO do host** ouvindo na 5432, que NÃO é o Supabase.
+      Ele recusa a autenticação vinda de contêiner (`no pg_hba.conf entry for host`), então
+      o estrago não seria dado silencioso — seria uma falha de autenticação confusa,
+      apontando para o servidor errado. Armadilha de diagnóstico, não de perda de dados.
 
   Por que isso importa: o instalador roda o psql assim, SEM --network —
 
@@ -362,6 +364,28 @@ variável de ambiente do container de auth, não tela do Studio. Me MOSTRE antes
 **Como saber que deu certo:** zero colisões, dump guardado em `/opt/backups/`, só o gatilho
 do zapmax removido (os outros intactos), as 3 extensões criadas, uma connection string que
 conecta de um container avulso, e o endereço do CRM na allow list do GoTrue.
+
+### ✅ Resultado real, 16/09/2026
+
+| Passo | Resultado |
+|---|---|
+| 1 — Colisão | **0 linhas**. O `public` tinha 26 tabelas, todas do zapmax, nenhuma das 94 |
+| 2 — Dump | `/opt/backups/zapmax-public-2026-09-16.sql`, 101 KB, íntegro |
+| 3 — Gatilho | Só o `on_auth_user_created` removido; os 3 outros intactos |
+| 4 — Extensões | `vector`, `citext`, `pg_trgm` criadas em `public` |
+| 5 — Ponte + prova | `supabase-db-bridge` no ar; prova devolveu **`15.8 | postgres | 4`** |
+| 6 — GoTrue | **Nada a fazer**: `https://crm.afatec.net/**` já estava na allow list |
+
+Duas observações que vieram da execução e valem guardar:
+
+- A ponte ficou **mais durável** do que publicar a porta teria ficado: o `socat` resolve
+  `supabase-db` por DNS **a cada conexão**, então recriar o contêiner do banco com outro IP
+  não a quebra. Com `--restart unless-stopped`, ela volta depois de reboot.
+- O `supabase-auth` **não foi reiniciado** — reiniciá-lo derrubaria o login do ianews,
+  carrossel e afatecpay por alguns segundos, sem ganho nenhum.
+- Ponta solta conhecida: o glob `https://crm.afatec.net/**` pode não casar com a URL **sem**
+  barra final. O DeskcommCRM usa `/auth/confirm`, que está coberto; se algum fluxo usar a
+  raiz exata, aí sim vale acrescentá-la (com reinício do auth).
 
 ---
 
