@@ -407,7 +407,9 @@ o tempo todo:
   - NÃO toque no Supabase self-hosted da VPS (o schema public é do zapmax em produção),
     nem no n8n, nem na Evolution API.
   - NÃO desligue o CRM antigo em /opt/crm-afatec — ele fica no ar em paralelo.
-  - O banco deste CRM novo é um projeto no Supabase CLOUD, não o da VPS.
+  - O banco deste CRM novo é o Supabase SELF-HOSTED da VPS, alcançado pela ponte socat
+    que subimos no Bloco 2 (172.17.0.1:5433). NÃO é Supabase Cloud, e NÃO é a 5432 do
+    host, que é de um PostgreSQL 16 nativo — outro banco.
   - Não rode "docker compose up -d caddy" NUNCA: nomear o serviço liga o profile dele e
     ele vai disputar as portas 80/443 com o EasyPanel.
 
@@ -419,9 +421,25 @@ PASSO 1 — Clonar, fora dos caminhos existentes:
   cp .env.hostgator.example .env
   chmod 600 .env
 
-PASSO 2 — Preencher o .env. Use um heredoc com ASPAS SIMPLES no delimitador (<<'EOF'),
-para o shell não interpolar nada, e escreva as chaves do Supabase a partir dos valores que
-eu vou te passar por um caminho seguro (nunca colados no chat do projeto).
+PASSO 2 — Colher as credenciais NA PRÓPRIA VPS. Nada de chave vinda pelo chat.
+
+  a) anon key e service_role: leia do ambiente dos contêineres do Supabase que já rodam
+     aí. Está autorizado a ler; NÃO imprima o valor inteiro na saída, só os 8 primeiros
+     caracteres para conferência:
+
+       docker inspect supabase-kong --format '{{range .Config.Env}}{{println .}}{{end}}' \
+         | grep -E '^(ANON_KEY|SERVICE_ROLE_KEY)=' | cut -c1-30
+
+     Se o supabase-kong não trouxer, procure no .env da stack do Supabase (o diretório que
+     tem o docker-compose dela) pelas chaves ANON_KEY e SERVICE_ROLE_KEY.
+
+  b) senha do primeiro admin: GERE na VPS, não peça pelo chat. Imprima UMA vez para eu
+     guardar no gerenciador de senhas, e troque depois do primeiro login:
+
+       openssl rand -base64 18
+
+PASSO 2-B — Preencher o .env. Use um heredoc com ASPAS SIMPLES no delimitador (<<'EOF'),
+para o shell não interpolar nada.
 
 Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
 
@@ -450,7 +468,7 @@ Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
 
   # Primeiro admin
   OWNER_EMAIL=<e-mail do Allisson>
-  OWNER_PASSWORD=<senha forte, no mínimo 8 caracteres>
+  OWNER_PASSWORD=<a senha gerada no PASSO 2-b>
 
   # Marca da Afatec — AfatecCRM sem espaço, exatamente assim
   APP_NAME=AfatecCRM
