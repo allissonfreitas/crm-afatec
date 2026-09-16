@@ -141,8 +141,16 @@ Vamos preparar o Supabase self-hosted da VPS para receber o DeskcommCRM. Regras:
   - Rode o psql pelo container do banco:
       docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1
 
-PASSO 1 — Prova de colisão (só leitura). O baseline do DeskcommCRM cria 94 tabelas em
-public. Descubra se alguma já existe:
+PASSO 1 — Prova de colisão (só leitura).
+
+⛔ **ESTE PASSO ESTAVA ERRADO E DEU FALSO NEGATIVO.** A lista de 94 nomes abaixo não veio
+do `baseline.sql`; o baseline cria **38 tabelas**, todas com `CREATE TABLE IF NOT EXISTS`,
+e **`contacts`, `conversations` e `messages` não estavam na lista** — justamente as três
+que colidem com o zapmax. Por isso a prova devolveu 0 linhas e a instalação quebrou no
+PASSO 4 do Bloco 3. A forma correta de derivar a lista é do próprio arquivo, e está no
+**Bloco 2-C**. A lista abaixo fica só como registro do erro.
+
+Consulta original (não use):
 
     select table_name
       from information_schema.tables
@@ -370,7 +378,7 @@ conecta de um container avulso, e o endereço do CRM na allow list do GoTrue.
 
 | Passo | Resultado |
 |---|---|
-| 1 — Colisão | **0 linhas**. O `public` tinha 26 tabelas, todas do zapmax, nenhuma das 94 |
+| 1 — Colisão | **0 linhas — resultado INVÁLIDO**, a lista de nomes estava errada. A colisão real é `contacts`, `conversations`, `messages`. Ver Bloco 2-C |
 | 2 — Dump | `/opt/backups/zapmax-public-2026-09-16.sql`, 101 KB, íntegro |
 | 3 — Gatilho | Só o `on_auth_user_created` removido; os 3 outros intactos |
 | 4 — Extensões | `vector`, `citext`, `pg_trgm` criadas em `public` |
@@ -387,6 +395,179 @@ Duas observações que vieram da execução e valem guardar:
 - Ponta solta conhecida: o glob `https://crm.afatec.net/**` pode não casar com a URL **sem**
   barra final. O DeskcommCRM usa `/auth/confirm`, que está coberto; se algum fluxo usar a
   raiz exata, aí sim vale acrescentá-la (com reinício do auth).
+
+---
+
+## Bloco 2-C — Limpar o `public` e reinstalar ⚠️ NECESSÁRIO em 16/09/2026
+
+**O que aconteceu.** O `install.sh` morreu no `baseline.sql:1401`, num
+`COMMENT ON CONSTRAINT "conversations_status_check"`. Causa: o baseline usa
+`CREATE TABLE IF NOT EXISTS` nas 38 tabelas dele; o zapmax já tinha uma
+`public.conversations`, então o `CREATE` foi pulado **em silêncio** e o `COMMENT` na linha
+seguinte não achou a constraint. O `public` ficou com 43 tabelas — as 26 do zapmax mais 17
+do baseline — e nenhum contêiner subiu.
+
+**Por que o Bloco 2 não pegou isso:** a lista de 94 nomes do PASSO 1 não foi extraída do
+`baseline.sql`. O baseline cria exatamente **38** tabelas, e `contacts`, `conversations` e
+`messages` **não estavam** na lista conferida. A prova devolveu 0 porque perguntou pelos
+nomes errados.
+
+**Números corretos, medidos no `supabase/baseline.sql` da v1.28.0:** 38 tabelas (todas
+`CREATE TABLE IF NOT EXISTS`), 38 funções (todas `CREATE OR REPLACE`), 1 view
+(`OR REPLACE`), 33 triggers, 49 policies, 111 índices, 0 `CREATE TYPE`, 0
+`CREATE EXTENSION` (as extensões quem cria é o instalador). Isso importa para o
+replanejamento: funções e view são reexecutáveis, **tabelas, triggers e policies não** — um
+segundo `install.sh` sobre o estado atual quebraria de novo, agora num `CREATE POLICY`.
+
+### O caminho escolhido: derrubar as TABELAS do `public`, não o schema
+
+`drop schema public cascade` é a opção errada aqui, por duas razões concretas:
+
+1. Levaria junto as extensões `vector`, `citext` e `pg_trgm`, que o instalador acabou de
+   criar **dentro do `public`** — e o `cascade` não para nelas: se ianews, carrossel ou
+   afatecpay tiverem alguma coluna `citext` ou `vector`, essas colunas caem junto. São
+   apps que você usa.
+2. Perderia o dono e os grants que o Supabase espera no `public`
+   (`owner pg_database_owner`, os `ALTER DEFAULT PRIVILEGES`), e restaurá-los à mão é outro
+   lugar para errar.
+
+Derrubar só as tabelas resolve o mesmo problema sem nenhum dos dois riscos. E como você
+liberou o zapmax, derrubamos **as 43**, deixando o `public` sem tabela nenhuma — assim o
+baseline roda num terreno limpo e nenhuma colisão de nome pode se repetir numa atualização
+futura.
+
+```
+O install.sh quebrou no baseline e o public ficou num estado misto. Vamos limpar e
+reinstalar. As regras de sempre continuam valendo (não encostar no Traefik do EasyPanel,
+no n8n, na Evolution API, nem no CRM antigo em /opt/crm-afatec).
+
+PASSO 1 — Dump NOVO do estado atual, por cima do que já existe em /opt/backups:
+
+  docker exec supabase-db pg_dump -U postgres -d postgres --schema=public \
+    > /opt/backups/public-pos-baseline-parcial-$(date +%Y%m%d-%H%M).sql
+  ls -lh /opt/backups/ | tail -5
+
+  Confira que o arquivo novo tem tamanho maior que zero antes de seguir.
+
+PASSO 2 — Levantar as dependências de OUTROS schemas sobre o public. Só leitura, e é
+o passo que decide se dá para limpar. Rode as quatro consultas e me mostre a saída inteira:
+
+  docker exec -i supabase-db psql -U postgres -d postgres <<'SQL'
+  -- a) chaves estrangeiras de outros schemas apontando para tabelas do public
+  select connamespace::regnamespace as schema_origem, conrelid::regclass as tabela,
+         conname, confrelid::regclass as aponta_para
+    from pg_constraint
+   where contype = 'f'
+     and connamespace::regnamespace::text not in ('public','pg_catalog')
+     and confrelid::regclass::text like 'public.%';
+
+  -- b) colunas em outros schemas usando tipos que moram no public (citext, vector)
+  select n.nspname as schema, c.relname as tabela, a.attname as coluna,
+         format_type(a.atttypid, a.atttypmod) as tipo
+    from pg_attribute a
+    join pg_class c on c.oid = a.attrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_type t on t.oid = a.atttypid
+   where a.attnum > 0 and not a.attisdropped and c.relkind = 'r'
+     and n.nspname not in ('public','pg_catalog','information_schema')
+     and t.typnamespace::regnamespace::text = 'public';
+
+  -- c) funções de outros schemas que citam public.
+  select n.nspname as schema, p.proname as funcao
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname in ('ianews','carrossel','afatecpay','crm')
+     and pg_get_functiondef(p.oid) like '%public.%';
+
+  -- d) as extensões e onde elas moram
+  select extname, extnamespace::regnamespace as schema from pg_extension order by 1;
+SQL
+
+  LEITURA DO RESULTADO:
+    - (a), (b) e (c) VAZIOS  -> pode seguir para o PASSO 3.
+    - (b) com QUALQUER linha -> PARE e me avise. Significa que outro app usa um tipo do
+      public, e a limpeza precisa ser repensada.
+    - (a) ou (c) com linhas  -> me mostre antes de seguir; provavelmente dá para tratar,
+      mas eu quero ver.
+    - (d) é só registro: vector, citext e pg_trgm devem aparecer no public e vão FICAR lá.
+
+PASSO 3 — Esvaziar o public de tabelas, preservando schema, dono, grants e extensões.
+O comando é gerado a partir do catálogo, não de lista digitada:
+
+  docker exec -i supabase-db psql -U postgres -d postgres <<'SQL'
+  do $$
+  declare r record; n int := 0;
+  begin
+    for r in select tablename from pg_tables where schemaname = 'public' loop
+      execute format('drop table if exists public.%I cascade', r.tablename);
+      n := n + 1;
+    end loop;
+    raise notice 'tabelas removidas: %', n;
+  end $$;
+  select count(*) as tabelas_restantes_no_public from pg_tables where schemaname='public';
+  select extname from pg_extension where extnamespace::regnamespace::text='public' order by 1;
+  select nspname, nspowner::regrole as dono from pg_namespace where nspname='public';
+SQL
+
+  Esperado: "tabelas removidas: 43", tabelas_restantes_no_public = 0, as três extensões
+  ainda listadas, e o public com o dono intacto.
+
+PASSO 3-B — Ver o que o baseline parcial deixou de funções órfãs:
+
+  docker exec -i supabase-db psql -U postgres -d postgres <<'SQL'
+  select count(*) as funcoes_no_public
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public';
+SQL
+
+  Só me RELATE o número. Não mexa nelas: o baseline recria todas com CREATE OR REPLACE,
+  então função sobrando não impede a reinstalação.
+
+PASSO 4 — Trocar a senha do primeiro admin. A anterior foi colada no chat, então não serve
+mais. Gere outra e escreva direto no .env:
+
+  cd /opt/deskcommcrm
+  NOVA=$(openssl rand -base64 18)
+  sed -i "s|^OWNER_PASSWORD=.*|OWNER_PASSWORD=${NOVA}|" .env
+  echo "nova senha: ${NOVA}"
+  grep -c '^OWNER_PASSWORD=.\{20,\}' .env
+
+  A última linha tem que devolver 1.
+
+PASSO 5 — Conferir que o resto do .env sobreviveu (o comando do Bloco 3 tinha um bug de
+regex: ^(...|TRAEFIK_)= exigia literalmente TRAEFIK_=; este está corrigido):
+
+  cd /opt/deskcommcrm
+  grep -E '^(DOMAIN=|ACME_EMAIL=|REVERSE_PROXY=|TRAEFIK_|APP_NAME=|APP_LOCALE=|APP_ACCENT_HEX=|APP_LOGO_URL=|COMPOSE_PROFILES=|OWNER_EMAIL=)' .env
+  grep -cE '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_URL|OWNER_PASSWORD)=.+' .env
+
+  A segunda linha tem que devolver 5, e APP_NAME tem que ser exatamente AfatecCRM.
+
+PASSO 6 — Reinstalar:
+
+  cd /opt/deskcommcrm
+  bash hostgator-setup-kit/install.sh --yes 2>&1 | tail -80
+
+  Os segredos que o instalador gerou na primeira tentativa já estão no .env e serão
+  reaproveitados. Se ele parar de novo, PARE e me mostre a mensagem inteira, com as 20
+  linhas anteriores ao erro — não tente contornar.
+
+PASSO 7 — Conferir o banco depois que o baseline passar:
+
+  docker exec -i supabase-db psql -U postgres -d postgres <<'SQL'
+  select count(*) as tabelas from pg_tables where schemaname='public';
+  select count(*) as policies from pg_policies where schemaname='public';
+  select count(*) as usuarios from auth.users;
+SQL
+
+  Esperado: 38 tabelas ou mais, policies acima de zero (se vier 0, o RLS não foi aplicado
+  e o schema está incompleto de novo), e auth.users com os 4 de antes mais o novo admin.
+
+Depois disso siga do PASSO 5 do Bloco 3 em diante (conferência dos contêineres, domínio,
+marca AfatecCRM e o check de que nada mais na VPS foi afetado).
+```
+
+**Como saber que deu certo:** `install.sh` termina sem erro, `public` com as 38 tabelas do
+CRM e nenhuma do zapmax, policies acima de zero, e os contêineres de pé.
 
 ---
 
@@ -495,7 +676,7 @@ PASSO 5 do Bloco 2.
 PASSO 3 — Conferir o .env antes de rodar (mascare os segredos na saída):
 
   cd /opt/deskcommcrm
-  grep -E '^(DOMAIN|ACME_EMAIL|NEXT_PUBLIC_APP_URL|REVERSE_PROXY|TRAEFIK_|APP_NAME|APP_LOCALE|APP_ACCENT_HEX|APP_LOGO_URL|COMPOSE_PROFILES|OWNER_EMAIL)=' .env
+  grep -E '^(DOMAIN=|ACME_EMAIL=|NEXT_PUBLIC_APP_URL=|REVERSE_PROXY=|TRAEFIK_|APP_NAME=|APP_LOCALE=|APP_ACCENT_HEX=|APP_LOGO_URL=|COMPOSE_PROFILES=|OWNER_EMAIL=)' .env
   grep -cE '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_URL|OWNER_PASSWORD)=.+' .env
 
   A segunda linha tem que devolver 5. Se devolver menos, alguma credencial ficou vazia.
@@ -517,7 +698,7 @@ PASSO 4 — Instalar:
 PASSO 5 — Conferir o resultado:
 
   cd /opt/deskcommcrm
-  grep -E '^(REVERSE_PROXY|TRAEFIK_NETWORK|TRAEFIK_ENTRYPOINT|TRAEFIK_CERTRESOLVER|APP_IMAGE|WORKER_IMAGE|SCHEDULER_IMAGE|COMPOSE_PROFILES)=' .env
+  grep -E '^(REVERSE_PROXY=|TRAEFIK_|APP_IMAGE=|WORKER_IMAGE=|SCHEDULER_IMAGE=|COMPOSE_PROFILES=)' .env
   docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml ps
   docker inspect deskcommcrm-app-1 --format '{{json .NetworkSettings.Networks}}' | tr ',' '\n' | grep -o '"[a-z_-]*":' | head
 
