@@ -19,7 +19,7 @@ e no que já está de pé na VPS da Afatec.
 
 | Decisão | Por quê |
 |---|---|
-| **Banco: EM REVISÃO (15/09/2026)** | O roteiro foi escrito para o **Supabase Cloud grátis**, mas as duas razões que eu dei para descartar o Supabase da VPS estavam erradas: **não há exigência de PG 17** (o CI do projeto roda em PG 15) e o baseline **não faz revoke em `public`**. A análise dos três caminhos — Cloud, o Supabase da VPS junto com o zapmax, ou um segundo Supabase self-hosted — está em `SUPABASE-SELFHOST-OU-CLOUD.md`. **Enquanto ele não escolher, os Blocos 2 e 3 ficam parados.** |
+| **Banco: o Supabase self-hosted que já está na VPS** | Decidido em 16/09/2026, depois que o Allisson liberou o zapmax (não usa mais; vai rodar local). Com o `public` livre, o CRM fica na VPS, de graça, sem conta nova, sem os 500 MB e sem hibernação do plano grátis, e sem o custo de RAM de um segundo Supabase. **Nada do zapmax é apagado** — ver o Bloco 2. |
 | **Domínio `crm.afatec.net`** | O CRM atual continua no ar em `crm-afatec.gddktt.easypanel.host` até você aprovar o novo. Nada é desligado nesta instalação. |
 | **Proxy: o Traefik do EasyPanel** | O app é publicado por ele, por label, na overlay `easypanel` (que é `attachable=true`). O Caddy do kit fica num profile desligado. Ninguém encosta no Traefik do EasyPanel. |
 | **WAHA com número NOVO** | O WhatsApp só aceita um pareamento por número. O chip do Agente Express está na Evolution API — parear o mesmo número no WAHA **derruba a Evolution**. |
@@ -60,9 +60,10 @@ O que o diagnóstico achou sobre o proxy, e que muda o Bloco 3:
 
 ---
 
-## Bloco 1 — DNS do `crm.afatec.net` ⏳ AGUARDA O CLOUDFLARE
+## Bloco 1 — DNS do `crm.afatec.net` ✅ APROVADO em 15/09/2026
 
-**Estado em 15/09/2026: reprovado.** O `crm.afatec.net` está com o proxy laranja ligado —
+**Resolvido.** O registro A foi corrigido e o AAAA sumiu junto com a nuvem laranja. O que
+estava errado, para registro: o `crm.afatec.net` estava com o proxy laranja ligado —
 o A responde `104.21.43.197` e `172.67.184.173` (Cloudflare), existe um AAAA do Cloudflare,
 e um GET devolve 404 com `server: cloudflare`. Comparação útil: o `n8nafatec.afatec.net`
 resolve para `76.13.98.43`, direto na VPS. É esse o padrão que o `crm` precisa seguir.
@@ -115,27 +116,215 @@ da VPS, e o `http://crm.afatec.net/` responde 301 sem `server: cloudflare`.
 
 ---
 
-## Bloco 2 — Criar o projeto no Supabase Cloud
+## Bloco 2 — Preparar o Supabase da VPS
 
-Este também é **seu**, e leva 3 minutos:
+O CRM vai usar o Supabase que já está de pé (`supb.afatec.net`, API em
+`zapmaxapi.afatec.net`), no schema `public`, que ficou livre com a saída do zapmax.
 
-1. Entre em [supabase.com](https://supabase.com) e crie um projeto novo na região
-   **South America (São Paulo) — sa-east-1**. Guarde a senha do banco que ele pedir.
-2. **Não precisa gerar token de conta.** O instalador usaria esse token só para configurar
-   os links dos e-mails de acesso, e isso são dois campos que você preenche no painel no
-   Bloco 4. Como ele é chave mestra da conta inteira (cria e apaga projetos), deixar ele
-   fora da VPS é de graça — e nada aqui pede que você o cole em chat nenhum.
+**Nada do zapmax é apagado neste bloco.** As tabelas dele ficam onde estão, inertes, até
+você ter o zapmax rodando no Docker local e decidir o que fazer com elas. A única escrita
+destrutiva aqui é **um `drop trigger`**, e ele é salvo antes.
 
-3. Em **Settings → API**, copie: *Project URL*, *anon key*, *service_role key*.
-4. Em **Settings → Database → Connection string**, copie a do **Session pooler, modo URI**.
-   > A *Direct connection* é IPv6-only e **não conecta de um VPS IPv4** — é o erro mais
-   > comum dessa instalação.
+> ⚠️ **Os outros apps continuam vivos.** `ianews`, `carrossel` e `afatecpay` moram nos
+> próprios schemas e não são tocados por nada aqui — mas o `auth.users` é **compartilhado**
+> com eles. Nada neste bloco pode mexer em `auth`, `storage` ou nos schemas deles.
 
-**Como saber que deu certo:** você tem as 4 credenciais e o projeto no painel do Supabase
-está verde (`ACTIVE_HEALTHY`). Projeto recém-criado leva alguns minutos para chegar lá.
+```
+Vamos preparar o Supabase self-hosted da VPS para receber o DeskcommCRM. Regras:
 
-> As 4 credenciais vão do seu computador direto para o `.env` na VPS, por SSH. Não precisam
-> passar pelo chat do projeto — e a `service_role` em especial não deve.
+  - NÃO apague nenhuma tabela, de nenhum schema. Nada de drop table, drop schema, truncate.
+  - NÃO toque nos schemas ianews, carrossel e afatecpay, nem em auth e storage (o
+    auth.users é compartilhado por todos eles).
+  - Toda escrita deste bloco é: 1 drop trigger (com a definição salva antes) e
+    3 create extension. Mais nada.
+  - Rode o psql pelo container do banco:
+      docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1
+
+PASSO 1 — Prova de colisão (só leitura). O baseline do DeskcommCRM cria 94 tabelas em
+public. Descubra se alguma já existe:
+
+    select table_name
+      from information_schema.tables
+     where table_schema = 'public'
+       and table_name in (
+      'ad_conversion_dispatches',
+      'ad_insights_connections',
+      'ad_platform_connections',
+      'agent_case_events',
+      'agent_cases',
+      'agent_inbox_items',
+      'ai_purpose_bindings',
+      'ai_reply_drafts',
+      'ai_router_decisions',
+      'ai_router_members',
+      'ai_routers',
+      'appointment_recovery_receipts',
+      'attendant_availability',
+      'automation_rule_runs',
+      'automation_rules',
+      'before_send_traces',
+      'calendar_appointments',
+      'calendar_availability_exceptions',
+      'calendar_connection_calendars',
+      'calendar_connections',
+      'calendar_event_types',
+      'calendar_external_events',
+      'calendar_oauth_nonces',
+      'catalog_products',
+      'channel_connection_requests',
+      'channel_knobs',
+      'channel_routing_policies',
+      'channel_routing_responsibles',
+      'channel_session_health',
+      'contact_field_proposals',
+      'conversation_assignment_events',
+      'conversation_notes',
+      'crm_lead_reactivations',
+      'crm_lead_risk_states',
+      'crm_lead_scores',
+      'crm_tasks',
+      'cron_jobs',
+      'demanda_conversas',
+      'demandas',
+      'disclosure_template_pointers',
+      'disclosure_template_versions',
+      'event_service_origins',
+      'flywheel_distiller_proposals',
+      'flywheel_judge_verdicts',
+      'followup_enrollment_events',
+      'followup_enrollments',
+      'followup_flow_pointers',
+      'followup_flow_versions',
+      'if',
+      'job_queue',
+      'judge_alignment_pool',
+      'knowledge_searches',
+      'lead_checkpoints',
+      'lead_notes',
+      'lead_state',
+      'lead_state_transitions',
+      'llm_calls',
+      'message_templates',
+      'meta_templates',
+      'metrics',
+      'org_guardrail_layers',
+      'org_memory_entries',
+      'org_memory_pointers',
+      'org_memory_versions',
+      'org_voice_calls',
+      'outbound_copies',
+      'pacing_ledger',
+      'platform_branding',
+      'platform_google_oauth',
+      'platform_meta_app',
+      'platform_settings',
+      'platform_support_sessions',
+      'playbook_pointers',
+      'playbook_versions',
+      'private',
+      'promise_table_pointers',
+      'promise_table_versions',
+      'public',
+      'push_subscriptions',
+      'reentry_knob_pointers',
+      'reentry_knob_versions',
+      'reentry_template_pointers',
+      'reentry_template_versions',
+      'send_ledger',
+      'skill_activations',
+      'skill_pointers',
+      'skill_versions',
+      'system_update_runs',
+      'system_version',
+      'team_invites',
+      'voice_calls',
+      'watchdog_cursors',
+      'webhook_lead_captures',
+      'webhook_sources'
+     );
+
+  ZERO linhas = caminho livre, siga. Qualquer linha que voltar é uma tabela do zapmax que
+  o baseline criaria por cima (o "create table if not exists" NÃO erra — ele pula, e o CRM
+  passa a usar a tabela errada em silêncio). Se voltar alguma, PARE e me mostre.
+
+  Mostre também o inventário atual, para ficar registrado:
+
+    select count(*) from information_schema.tables where table_schema='public';
+    select tablename from pg_tables where schemaname='public' order by 1;
+
+PASSO 2 — Dump de segurança do zapmax, antes de qualquer escrita. Nada é apagado; isto é
+para você poder levar o zapmax para o Docker local depois:
+
+    mkdir -p /opt/backups
+    docker exec supabase-db pg_dump -U postgres -d postgres --schema=public \
+      > /opt/backups/zapmax-public-$(date +%F).sql
+    ls -lh /opt/backups/
+
+  Confirme que o arquivo tem tamanho > 0 antes de seguir.
+
+PASSO 3 — O gatilho do zapmax em auth.users. Ele dispara a cada usuário novo, inclusive os
+do CRM, e escreve em public.profiles (tabela do zapmax). Primeiro me MOSTRE o que existe:
+
+    select tgname, pg_get_triggerdef(oid)
+      from pg_trigger
+     where tgrelid = 'auth.users'::regclass and not tgisinternal;
+
+  Salve a saída inteira em /opt/backups/triggers-auth-users-$(date +%F).sql — é o que
+  permite desfazer. Depois remova SÓ o do zapmax:
+
+    drop trigger if exists on_auth_user_created on auth.users;
+
+  ⚠️ NÃO remova on_auth_user_created_crm, ianews_on_auth_user_created,
+  on_auth_user_created_carrossel nem qualquer outro. Se o nome do gatilho do zapmax na
+  saída acima for diferente do que escrevi, PARE e me pergunte antes.
+
+  Confirme rodando a consulta de novo: os outros gatilhos têm que continuar lá.
+
+PASSO 4 — Extensões que o baseline usa, em public (aditivo, não mexe em nada existente):
+
+    create extension if not exists vector   with schema public;
+    create extension if not exists citext   with schema public;
+    create extension if not exists pg_trgm  with schema public;
+    select extname from pg_extension order by 1;
+
+PASSO 5 — Conectividade, e este passo decide o formato da connection string. O instalador
+roda o psql assim:
+
+    docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL"
+
+  Sem --network. Ou seja, ele NÃO resolve o nome "supabase-db": a string tem que apontar
+  para um endereço alcançável do bridge padrão. Descubra:
+
+    docker port supabase-db
+    ss -tlnp | grep ':5432'
+    docker run --rm postgres:17-alpine psql \
+      "postgresql://postgres:SENHA@172.17.0.1:5432/postgres" -tAc 'select version()'
+
+  Se a 5432 não estiver publicada no host, me avise ANTES de publicar — publicar Postgres
+  no host é decisão de segurança, e há alternativa (fixar o IP do container).
+
+  Me diga qual string funcionou. Ela vai em SUPABASE_DB_URL e em SUPABASE_DB_ADMIN_URL no
+  Bloco 3 (em Supabase próprio o guia manda preencher as duas).
+
+PASSO 6 — GoTrue: liberar o endereço de retorno do CRM. Num Supabase self-hosted isso é
+variável de ambiente do container de auth, não tela do Studio. Me MOSTRE antes de mudar:
+
+    docker inspect supabase-auth --format '{{range .Config.Env}}{{println .}}{{end}}' \
+      | grep -E 'SITE_URL|URI_ALLOW_LIST'
+
+  ⚠️ NÃO troque o GOTRUE_SITE_URL: ele é compartilhado com ianews, carrossel e afatecpay, e
+  trocá-lo quebraria os e-mails deles. O que precisamos é ACRESCENTAR o endereço do CRM ao
+  GOTRUE_URI_ALLOW_LIST, mantendo os que já estão lá:
+
+    https://crm.afatec.net,https://crm.afatec.net/auth/confirm
+
+  Me mostre o valor atual e o novo que você propõe, e espere eu confirmar antes de aplicar
+  e reiniciar o container de auth.
+```
+
+**Como saber que deu certo:** zero colisões, dump guardado em `/opt/backups/`, só o gatilho
+do zapmax removido (os outros intactos), as 3 extensões criadas, uma connection string que
+conecta de um container avulso, e o endereço do CRM na allow list do GoTrue.
 
 ---
 
@@ -189,11 +378,13 @@ Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
   TRAEFIK_ENTRYPOINT_HTTP=http
   TRAEFIK_CERTRESOLVER=letsencrypt
 
-  # Supabase Cloud
-  NEXT_PUBLIC_SUPABASE_URL=<Project URL>
+  # Supabase self-hosted da VPS (o gateway Kong, não o Studio)
+  NEXT_PUBLIC_SUPABASE_URL=https://zapmaxapi.afatec.net
   NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
   SUPABASE_SERVICE_ROLE_KEY=<service_role key>
-  SUPABASE_DB_URL=<connection string do SESSION POOLER, modo URI>
+  SUPABASE_DB_URL=<a string que funcionou no PASSO 5 do Bloco 2>
+  # em Supabase PRÓPRIO o guia manda preencher as duas; é esta que aplica o schema
+  SUPABASE_DB_ADMIN_URL=<a mesma string, se ela for do dono do banco>
 
   # Primeiro admin
   OWNER_EMAIL=<e-mail do Allisson>
@@ -217,8 +408,9 @@ com "Falta APP_LOCALE" se ela não existir. É por isso que ela está na lista a
 > `.env.hostgator.example`, no `install.sh` e nos dois composes: todas existem e são lidas.
 > A única ausente do template é a `APP_LOCALE` — por isso o aviso acima.
 
-⚠️ A connection string tem que ser a do **Session pooler, modo URI**. A "Direct connection"
-é IPv6-only e não conecta de um VPS IPv4 — é o erro mais comum desta instalação.
+⚠️ A connection string **não pode usar o nome `supabase-db`**: o instalador roda o psql num
+container avulso, sem `--network`, e ele não resolve esse nome. Use a que passou no PASSO 5
+do Bloco 2.
 
 PASSO 3 — Conferir o .env antes de rodar (mascare os segredos na saída):
 
@@ -308,20 +500,17 @@ dá para apontar direto para ela — é uma URL pública e gratuita:
      docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml up -d
 ```
 
-4. **Site URL e Redirect URLs — faça no painel do Supabase, à mão.** É o passo que decide
-   se o "esqueci minha senha", a confirmação de conta e o aceite de convite chegam com link
-   que funciona. Ele nasce como `http://localhost:3000`. Em
-   **Authentication → URL Configuration** do seu projeto:
+4. **Site URL e Redirect URLs** já foram tratados no **PASSO 6 do Bloco 2** — num Supabase
+   self-hosted eles são variáveis do container de auth (`GOTRUE_SITE_URL`,
+   `GOTRUE_URI_ALLOW_LIST`), não tela do Studio, e o `SITE_URL` é compartilhado com os
+   outros apps. Só confira que o endereço do CRM continua na allow list depois da instalação.
 
-   - **Site URL:** `https://crm.afatec.net`
-   - **Redirect URLs:** `https://crm.afatec.net/auth/confirm`
-
-   > Existe um script que faz isso sozinho e ainda deixa os e-mails com a marca da Afatec —
-   > `hostgator-setup-kit/marca-emails.sh` —, mas ele **exige o token de conta do Supabase**,
-   > que é chave mestra. Dois campos no painel resolvem a parte que importa sem o token
-   > sair do lugar. Se você quiser os e-mails com a marca depois, rode numa linha só, do
-   > seu terminal, sem gravar nada:
-   > `ssh root@VPS "cd /opt/deskcommcrm && SUPABASE_ACCESS_TOKEN=sbp_... bash hostgator-setup-kit/marca-emails.sh"`
+   > O `hostgator-setup-kit/marca-emails.sh`, que deixaria os e-mails de acesso com a marca
+   > da Afatec, **não serve aqui**: ele fala com a Management API do Supabase Cloud
+   > (`api.supabase.com`) usando um token de conta, que não existe em self-hosted. Os
+   > e-mails de acesso ficam no modelo padrão do GoTrue. Personalizá-los é mexer nos
+   > templates do container de auth — e eles são compartilhados com ianews, carrossel e
+   > afatecpay, então é mudança para depois, com cuidado, não agora.
 
 **Como saber que deu certo:** a tela de login mostra a logo da Afatec, o azul da marca
 aparece nos botões, e o `marca-emails.sh` terminou sem erro.
