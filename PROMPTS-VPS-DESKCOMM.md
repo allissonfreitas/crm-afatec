@@ -1,7 +1,7 @@
 # Subir o DeskcommCRM na VPS, com a marca Afatec
 
 Roteiro escrito em 15/09/2026 para o **Claude Code do Allisson**, que alcança a VPS por SSH.
-Baseado no DeskcommCRM **v1.27.2** (`melgarafael/DeskcommCRM`, MIT), lido commit a commit,
+Baseado no DeskcommCRM **v1.28.0** (`melgarafael/DeskcommCRM`, MIT), lido commit a commit,
 e no que já está de pé na VPS da Afatec.
 
 > **Revisão de 15/09/2026, depois do Bloco 0.** O diagnóstico rodou e mudou três coisas:
@@ -287,24 +287,61 @@ PASSO 4 — Extensões que o baseline usa, em public (aditivo, não mexe em nada
     create extension if not exists pg_trgm  with schema public;
     select extname from pg_extension order by 1;
 
-PASSO 5 — Conectividade, e este passo decide o formato da connection string. O instalador
-roda o psql assim:
+PASSO 5 — Conectividade. ⚠️ ESTE PASSO TEM DUAS ARMADILHAS, as duas confirmadas na VPS
+em 16/09/2026:
 
-    docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL"
+  (1) O `supabase-db` NÃO publica porta nenhuma no host, e vive numa rede própria
+      (172.19.0.9). Um container do bridge padrão não alcança esse IP — testado.
+  (2) Existe um **PostgreSQL 16 NATIVO do host** ouvindo na 5432. Então
+      `172.17.0.1:5432` conecta no banco ERRADO, e o baseline do CRM iria para lá.
 
-  Sem --network. Ou seja, ele NÃO resolve o nome "supabase-db": a string tem que apontar
-  para um endereço alcançável do bridge padrão. Descubra:
+  Por que isso importa: o instalador roda o psql assim, SEM --network —
 
-    docker port supabase-db
-    ss -tlnp | grep ':5432'
-    docker run --rm postgres:17-alpine psql \
-      "postgresql://postgres:SENHA@172.17.0.1:5432/postgres" -tAc 'select version()'
+      docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL"
 
-  Se a 5432 não estiver publicada no host, me avise ANTES de publicar — publicar Postgres
-  no host é decisão de segurança, e há alternativa (fixar o IP do container).
+  — e o mesmo vale para update.sh, backup.sh e restore.sh, que usam a mesma função
+  `psql_run` do `_common.sh`. Então a string precisa funcionar a partir do bridge padrão.
 
-  Me diga qual string funcionou. Ela vai em SUPABASE_DB_URL e em SUPABASE_DB_ADMIN_URL no
-  Bloco 3 (em Supabase próprio o guia manda preencher as duas).
+  A saída escolhida é uma **ponte TCP dedicada**, e não publicar porta no supabase-db.
+  Motivo: publicar porta exige RECRIAR o container do banco, o que derruba por alguns
+  segundos o ianews, o carrossel e o afatecpay — e mexe na stack compartilhada do Supabase,
+  que o EasyPanel pode gerenciar. A ponte é aditiva, não encosta no banco e sai com um
+  `docker rm -f`.
+
+  1. Descubra a rede do supabase-db e confirme que a 5433 está livre:
+
+       docker inspect supabase-db --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
+       ss -tlnp | grep ':5433 ' ; echo "(vazio = livre)"
+
+  2. Suba a ponte, trocando <REDE> pelo nome que saiu acima:
+
+       docker run -d --name supabase-db-bridge --restart unless-stopped \
+         --network <REDE> -p 172.17.0.1:5433:5433 alpine/socat \
+         tcp-listen:5433,fork,reuseaddr tcp-connect:supabase-db:5432
+
+     O bind é em 172.17.0.1 de propósito: é a interface docker0, alcançável por qualquer
+     container e pelo host, e NÃO exposta à internet. Nunca use 0.0.0.0 aqui.
+
+  3. Pegue a senha do Postgres do próprio ambiente do container (não me mande a senha):
+
+       docker inspect supabase-db --format '{{range .Config.Env}}{{println .}}{{end}}' \
+         | grep '^POSTGRES_PASSWORD='
+
+  4. **PROVE que a string cai no banco certo.** Este teste é obrigatório — é ele que
+     separa o Supabase do PostgreSQL 16 nativo do host:
+
+       docker run --rm postgres:17-alpine psql \
+         "postgresql://postgres:SENHA@172.17.0.1:5433/postgres" -tAc \
+         "select current_setting('server_version'), current_database(), (select count(*) from auth.users)"
+
+     Esperado: versão **15.x** (o Supabase), o banco `postgres`, e a contagem de
+     `auth.users` respondendo um número. Se vier **16.x**, ou se `auth.users` não existir,
+     você está no Postgres nativo do host — PARE, não rode mais nada, e me avise.
+
+     ⚠️ Não mexa no PostgreSQL 16 nativo do host. Ele não é nosso; só não usamos a 5432.
+
+  5. Me diga que a prova passou. Essa string vai em SUPABASE_DB_URL e em
+     SUPABASE_DB_ADMIN_URL no Bloco 3 (em Supabase próprio o guia manda preencher as duas).
 
 PASSO 6 — GoTrue: liberar o endereço de retorno do CRM. Num Supabase self-hosted isso é
 variável de ambiente do container de auth, não tela do Studio. Me MOSTRE antes de mudar:
@@ -404,13 +441,13 @@ Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
 ⚠️ APP_LOCALE **não vem** no .env.hostgator.example, e em modo --yes o instalador aborta
 com "Falta APP_LOCALE" se ela não existir. É por isso que ela está na lista acima.
 
-> **Os nomes destas chaves foram conferidos contra a v1.27.2**, uma a uma, no
+> **Os nomes destas chaves foram conferidos contra a v1.28.0**, uma a uma, no
 > `.env.hostgator.example`, no `install.sh` e nos dois composes: todas existem e são lidas.
 > A única ausente do template é a `APP_LOCALE` — por isso o aviso acima.
 
-⚠️ A connection string **não pode usar o nome `supabase-db`**: o instalador roda o psql num
-container avulso, sem `--network`, e ele não resolve esse nome. Use a que passou no PASSO 5
-do Bloco 2.
+⚠️ A connection string **não pode usar o nome `supabase-db`**, nem a porta **5432 do host**
+(que é de um PostgreSQL 16 nativo, outro banco). Use exatamente a que passou na prova do
+PASSO 5 do Bloco 2.
 
 PASSO 3 — Conferir o .env antes de rodar (mascare os segredos na saída):
 
