@@ -20,6 +20,7 @@ e no que já está de pé na VPS da Afatec.
 | Decisão | Por quê |
 |---|---|
 | **Banco: o Supabase self-hosted que já está na VPS** | Decidido em 16/09/2026, depois que o Allisson liberou o zapmax (não usa mais; vai rodar local). Com o `public` livre, o CRM fica na VPS, de graça, sem conta nova, sem os 500 MB e sem hibernação do plano grátis, e sem o custo de RAM de um segundo Supabase. **Nada do zapmax é apagado** — ver o Bloco 2. |
+| **Nome do produto: `AfatecCRM`** | Decidido em 16/09/2026. Uma palavra só, sem espaço. Entra em `APP_NAME` no `.env` (variável de runtime, sobrevive a atualização de imagem) e derruba o logotipo do produto de origem em toda tela — ver o Bloco 4, que lista o que isso cobre e os três resíduos em código. |
 | **Domínio `crm.afatec.net`** | O CRM atual continua no ar em `crm-afatec.gddktt.easypanel.host` até você aprovar o novo. Nada é desligado nesta instalação. |
 | **Proxy: o Traefik do EasyPanel** | O app é publicado por ele, por label, na overlay `easypanel` (que é `attachable=true`). O Caddy do kit fica num profile desligado. Ninguém encosta no Traefik do EasyPanel. |
 | **WAHA com número NOVO** | O WhatsApp só aceita um pareamento por número. O chip do Agente Express está na Evolution API — parear o mesmo número no WAHA **derruba a Evolution**. |
@@ -451,8 +452,8 @@ Edite/acrescente EXATAMENTE estas chaves no /opt/deskcommcrm/.env:
   OWNER_EMAIL=<e-mail do Allisson>
   OWNER_PASSWORD=<senha forte, no mínimo 8 caracteres>
 
-  # Marca da Afatec
-  APP_NAME=Afatec CRM
+  # Marca da Afatec — AfatecCRM sem espaço, exatamente assim
+  APP_NAME=AfatecCRM
   APP_LOCALE=pt-BR
   APP_ACCENT_HEX=#0090FE
   APP_LOGO_URL=https://crm-afatec.gddktt.easypanel.host/logo-afatec.png
@@ -533,48 +534,131 @@ e `https://crm.afatec.net` devolvendo a tela de login com cadeado válido.
 
 ---
 
-## Bloco 4 — Marca da Afatec
+## Bloco 4 — Marca: o nome é **AfatecCRM**
+
+O produto foi feito para marca própria: o nome e a logo vêm de variáveis de RUNTIME
+(`APP_NAME`, `APP_LOGO_URL`, `APP_ACCENT_HEX`), lidas a cada requisição, não no build.
+Isso quer dizer que a troca sobrevive a toda atualização de imagem — não é um patch que
+o `update.sh` desfaz.
+
+E há uma regra no código que trabalha a nosso favor: `marcaEhADoProduto()`
+(`lib/branding.ts:95`) só devolve verdadeiro quando **não há logo configurada E o nome é
+o padrão**. Assim que `APP_NAME` for outra coisa, o logotipo desenhado do produto — que
+soletra o nome antigo letra por letra em `lib/branding/desenho.ts` — para de ser
+desenhado em qualquer tela. Não é escondido: deixa de existir na saída.
 
 ```
-Agora a identidade visual. A logo da Afatec já está publicada pelo CRM antigo, então
-dá para apontar direto para ela — é uma URL pública e gratuita:
-
-  https://crm-afatec.gddktt.easypanel.host/logo-afatec.png
-
-1. Confirme que a URL responde uma imagem:
+1. Confirme que a logo da Afatec responde (é a URL pública que o CRM antigo já serve):
 
      curl -sI https://crm-afatec.gddktt.easypanel.host/logo-afatec.png | head -3
 
-2. No /opt/deskcommcrm/.env, garanta estas três linhas (o instalador já deve ter
-   escrito APP_NAME e APP_ACCENT_HEX; acrescente a logo):
+2. No /opt/deskcommcrm/.env, garanta estas três linhas exatamente assim:
 
-     APP_NAME=Afatec CRM
+     APP_NAME=AfatecCRM
      APP_ACCENT_HEX=#0090FE
      APP_LOGO_URL=https://crm-afatec.gddktt.easypanel.host/logo-afatec.png
 
-   A cor tem que ser cerquilha + 6 dígitos. "#0090FE" funciona; "#09F" ou "0090FE"
-   pintam a tela mas quebram o e-mail de acesso.
+   AfatecCRM é uma palavra só, sem espaço. A cor tem que ser cerquilha + 6 dígitos:
+   "#0090FE" funciona; "#09F" ou "0090FE" pintam a tela mas quebram o e-mail de acesso.
 
 3. Aplique:
 
      cd /opt/deskcommcrm
      docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml up -d
+
+4. Prova de que o nome antigo sumiu das telas — as quatro de uma vez:
+
+     # título da aba e nome da aplicação
+     curl -s https://crm.afatec.net/login | grep -o '<title>[^<]*</title>'
+     # manifesto do PWA (nome do atalho na tela inicial do celular)
+     curl -s https://crm.afatec.net/manifest.webmanifest
+     # favicon gerado em runtime — tem que responder image/png
+     curl -sI https://crm.afatec.net/icon | grep -i content-type
+     # varredura: o nome antigo não pode aparecer no HTML de nenhuma das públicas
+     for u in / /login /manifest.webmanifest; do
+       printf '%s -> ' "$u"
+       curl -s "https://crm.afatec.net$u" | grep -c Deskcomm
+     done
+
+   Esperado: o `<title>` começa com "AfatecCRM", o manifesto traz
+   `"name":"AfatecCRM"`, o /icon devolve PNG, e a varredura devolve `0` nas três.
 ```
 
-4. **Site URL e Redirect URLs** já foram tratados no **PASSO 6 do Bloco 2** — num Supabase
-   self-hosted eles são variáveis do container de auth (`GOTRUE_SITE_URL`,
-   `GOTRUE_URI_ALLOW_LIST`), não tela do Studio, e o `SITE_URL` é compartilhado com os
-   outros apps. Só confira que o endereço do CRM continua na allow list depois da instalação.
+### O que o `APP_NAME` já cobre sozinho
 
-   > O `hostgator-setup-kit/marca-emails.sh`, que deixaria os e-mails de acesso com a marca
-   > da Afatec, **não serve aqui**: ele fala com a Management API do Supabase Cloud
-   > (`api.supabase.com`) usando um token de conta, que não existe em self-hosted. Os
-   > e-mails de acesso ficam no modelo padrão do GoTrue. Personalizá-los é mexer nos
-   > templates do container de auth — e eles são compartilhados com ianews, carrossel e
-   > afatecpay, então é mudança para depois, com cuidado, não agora.
+Conferido linha a linha na v1.28.0 que vamos instalar:
 
-**Como saber que deu certo:** a tela de login mostra a logo da Afatec, o azul da marca
-aparece nos botões, e o `marca-emails.sh` terminou sem erro.
+| Onde o usuário vê | Arquivo | Vira AfatecCRM? |
+|---|---|---|
+| Título de toda aba (`AfatecCRM — …` e `Inbox · AfatecCRM`) | `app/layout.tsx:80` | sim |
+| Favicon da aba (ladrilho com a inicial na cor da marca) | `app/icon.tsx` | sim |
+| Nome do PWA / atalho no celular | `app/manifest.ts` | sim |
+| Barra lateral, aberta e recolhida | `components/shell/Sidebar.tsx` | sim |
+| Barra lateral do admin da plataforma | `components/admin/AdminSidebar.tsx` | sim |
+| Tela de login e fachada pública | `app/(public)/layout.tsx` | sim |
+| Onboarding do primeiro acesso | `app/onboarding/layout.tsx` | sim |
+| Logotipo desenhado do produto | `lib/branding/desenho.ts` | some da tela |
+| E-mails de convite, MFA e LGPD | `lib/branding/saida.ts` | sim |
+| PDF de resposta LGPD | `lib/lgpd/pdf-renderer.tsx` | sim |
+
+Além disso o produto tem **duas telas** para trocar isso depois sem mexer em arquivo:
+**Admin da plataforma › Marca da instalação** e **Configurações › Marca**. O que é
+gravado no banco por essas telas tem prioridade sobre o `.env` — é a camada de cima
+da pilha (`app/layout.tsx:59`). Então dá para ajustar nome, cor e logo pelo navegador,
+com a instalação no ar.
+
+### O que sobra, e o que fazer com isso
+
+Três lugares ainda têm o nome antigo cravado em código. Nenhum aparece na navegação
+normal, mas você pediu "em lugar nenhum", então ficam declarados:
+
+1. **`/design`** — uma vitrine do design system (`app/design/`), não linkada de lugar
+   nenhum e marcada `noindex`, mas servida se alguém digitar o endereço.
+2. **`/llms.txt`** — arquivo público em `public/llms.txt` com o nome e os links do
+   projeto de origem.
+3. **Assunto de um e-mail só** — o alarme de orçamento de IA
+   (`lib/email/templates/ai-budget-alarm.tsx:35`) tem o nome antigo no assunto. Só
+   dispara se você cadastrar chave de IA e o gasto bater o teto configurado; até lá
+   não existe.
+
+Dois caminhos, e eu recomendo o primeiro agora:
+
+- **Bloquear as duas URLs no Traefik** (grátis, 5 minutos, nada de build). O compose
+  já traz o padrão pronto para isso: o roteador `deskcomm-waha-block` bloqueia um
+  caminho com `ipallowlist` de faixa impossível. Copiar esse bloco para `/design` e
+  `/llms.txt` resolve. **Atenção:** fica em `docker-compose.traefik.yml`, que é
+  versionado — o `update.sh` faz checkout da tag e desfaz. Tem que reaplicar depois de
+  cada atualização, ou guardar o trecho num arquivo à parte para colar de volta.
+- **Build próprio** (o certo definitivo, também grátis). Fork do repositório, três
+  edições de texto, e o GitHub Actions monta a imagem e publica no GHCR sem custo para
+  repositório público. Aí `APP_IMAGE` no `.env` aponta para a sua imagem e o nome antigo
+  deixa de existir no disco. Custo: passamos a ser responsáveis por acompanhar as
+  releases de origem. Vale a pena depois que o CRM estiver rodando e provado, não antes.
+
+### E-mails de acesso (confirmar conta, redefinir senha)
+
+Correção do que eu tinha escrito antes: o app **serve** os moldes com a marca em
+`https://crm.afatec.net/email-templates/confirmation` e `/recovery`, e o GoTrue sabe
+carregar molde por URL (`GOTRUE_MAILER_TEMPLATES_CONFIRMATION`). Não é impossível, como
+eu disse.
+
+O problema é outro, e é decisivo: **o GoTrue da VPS é um só**, compartilhado com ianews,
+carrossel, afatecpay e zapmax. Apontar essas variáveis para o CRM colocaria a marca
+AfatecCRM nos e-mails de acesso **de todos os apps**. Por isso ficam como estão: no
+modelo padrão do GoTrue, que não cita marca nenhuma — nem a antiga. Ou seja, não há
+vazamento de nome aqui; há só uma oportunidade de marca que não dá para pegar sem
+afetar os vizinhos.
+
+O `hostgator-setup-kit/marca-emails.sh` continua inútil aqui: ele fala com a Management
+API do Supabase Cloud (`api.supabase.com`) com um token de conta, que não existe em
+self-hosted.
+
+**Site URL e Redirect URLs** já foram tratados no **PASSO 6 do Bloco 2**. Só confira que
+o endereço do CRM continua na allow list depois da instalação.
+
+**Como saber que deu certo:** a tela de login mostra a logo da Afatec, o azul #0090FE
+aparece nos botões, o `<title>` da aba começa com "AfatecCRM" e a varredura do passo 4
+devolve `0` nas três URLs.
 
 ---
 
