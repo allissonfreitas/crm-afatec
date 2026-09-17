@@ -415,7 +415,8 @@ nomes errados.
 **Números corretos, medidos no `supabase/baseline.sql` da v1.28.0:** 38 tabelas (todas
 `CREATE TABLE IF NOT EXISTS`), 38 funções (todas `CREATE OR REPLACE`), 1 view
 (`OR REPLACE`), 33 triggers, 49 policies, 111 índices, 0 `CREATE TYPE`, 0
-`CREATE EXTENSION` (as extensões quem cria é o instalador). Isso importa para o
+`CREATE EXTENSION` (as extensões quem cria é o instalador, dentro do `public`; somadas à
+`unaccent` que o CRM antigo já usava, são quatro). Isso importa para o
 replanejamento: funções e view são reexecutáveis, **tabelas, triggers e policies não** — um
 segundo `install.sh` sobre o estado atual quebraria de novo, agora num `CREATE POLICY`.
 
@@ -423,10 +424,11 @@ segundo `install.sh` sobre o estado atual quebraria de novo, agora num `CREATE P
 
 `drop schema public cascade` é a opção errada aqui, por duas razões concretas:
 
-1. Levaria junto as extensões `vector`, `citext` e `pg_trgm`, que o instalador acabou de
-   criar **dentro do `public`** — e o `cascade` não para nelas: se ianews, carrossel ou
-   afatecpay tiverem alguma coluna `citext` ou `vector`, essas colunas caem junto. São
-   apps que você usa.
+1. Levaria junto as **quatro** extensões que moram no `public` — `citext`, `pg_trgm`,
+   `vector` e `unaccent` — e o `cascade` não para nelas. A `unaccent` é o caso concreto:
+   o CRM antigo tem `crm.f_unaccent`, que chama `public.unaccent`; com a extensão fora,
+   a busca sem acento do CRM em produção para de funcionar. (Medido na VPS em
+   17/09/2026; a lista de três que eu escrevi antes estava incompleta.)
 2. Perderia o dono e os grants que o Supabase espera no `public`
    (`owner pg_database_owner`, os `ALTER DEFAULT PRIVILEGES`), e restaurá-los à mão é outro
    lugar para errar.
@@ -472,23 +474,57 @@ o passo que decide se dá para limpar. Rode as quatro consultas e me mostre a sa
      and n.nspname not in ('public','pg_catalog','information_schema')
      and t.typnamespace::regnamespace::text = 'public';
 
-  -- c) funções de outros schemas que citam public.
-  select n.nspname as schema, p.proname as funcao
+  -- c) funções e procedures de outros schemas que citam public.
+  -- O filtro prokind é OBRIGATÓRIO: pg_get_functiondef lança erro em agregado
+  -- ('"array_agg" is an aggregate function') e o planner o avalia antes do filtro
+  -- de schema, então sem ele a consulta INTEIRA falha — e um erro não é "vazio".
+  select n.nspname as schema, p.proname as funcao, p.prokind
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname in ('ianews','carrossel','afatecpay','crm')
+     and p.prokind in ('f','p')
      and pg_get_functiondef(p.oid) like '%public.%';
+
+  -- c2) views e matviews de outros schemas sobre tabelas do public
+  select distinct dn.nspname as schema, dc.relname as objeto, dc.relkind
+    from pg_depend d
+    join pg_rewrite rw on rw.oid = d.objid
+    join pg_class dc on dc.oid = rw.ev_class
+    join pg_namespace dn on dn.oid = dc.relnamespace
+    join pg_class sc on sc.oid = d.refobjid
+    join pg_namespace sn on sn.oid = sc.relnamespace
+   where sn.nspname = 'public' and dn.nspname <> 'public'
+     and dc.relkind in ('v','m');
 
   -- d) as extensões e onde elas moram
   select extname, extnamespace::regnamespace as schema from pg_extension order by 1;
 SQL
 
   LEITURA DO RESULTADO:
-    - (a), (b) e (c) VAZIOS  -> pode seguir para o PASSO 3.
+    - ERRO em qualquer consulta NÃO é "vazio". Se alguma falhar, conserte e rode de novo
+      antes de concluir qualquer coisa.
+    - (a), (b), (c) e (c2) VAZIOS -> pode seguir para o PASSO 2-D.
     - (b) com QUALQUER linha -> PARE e me avise. Significa que outro app usa um tipo do
       public, e a limpeza precisa ser repensada.
-    - (a) ou (c) com linhas  -> me mostre antes de seguir; provavelmente dá para tratar,
-      mas eu quero ver.
-    - (d) é só registro: vector, citext e pg_trgm devem aparecer no public e vão FICAR lá.
+    - (a), (c) ou (c2) com linhas -> me mostre antes de seguir. Função que depende só de
+      EXTENSÃO do public (o caso de `crm.f_unaccent`, que chama `public.unaccent`) é
+      benigna: o PASSO 3 não toca em extensão. Dependência de TABELA do public é que
+      exige conversa.
+    - (d) é registro: **quatro** extensões vivem no public — `citext`, `pg_trgm`,
+      `unaccent` e `vector` — e as quatro vão FICAR lá.
+
+PASSO 2-D — Última olhada no que vai embora. Nenhuma tabela com linha deve sumir sem você
+ter visto o número antes:
+
+  docker exec -i supabase-db psql -U postgres -d postgres <<'SQL'
+  select relname as tabela, n_live_tup as linhas_estimadas
+    from pg_stat_user_tables
+   where schemaname = 'public'
+   order by n_live_tup desc, relname;
+SQL
+
+  Me mostre a saída inteira. O esperado é 43 tabelas com zero ou quase zero linhas (o
+  zapmax está liberado e há dump em /opt/backups). Se alguma aparecer com volume que você
+  não esperava, PARE e me avise antes do PASSO 3.
 
 PASSO 3 — Esvaziar o public de tabelas, preservando schema, dono, grants e extensões.
 O comando é gerado a partir do catálogo, não de lista digitada:
@@ -508,8 +544,9 @@ O comando é gerado a partir do catálogo, não de lista digitada:
   select nspname, nspowner::regrole as dono from pg_namespace where nspname='public';
 SQL
 
-  Esperado: "tabelas removidas: 43", tabelas_restantes_no_public = 0, as três extensões
-  ainda listadas, e o public com o dono intacto.
+  Esperado: "tabelas removidas: 43", tabelas_restantes_no_public = 0, as **quatro**
+  extensões ainda listadas (citext, pg_trgm, unaccent, vector) e o public com o dono
+  intacto. Se vierem só três, algo saiu errado — pare e me avise.
 
 PASSO 3-B — Ver o que o baseline parcial deixou de funções órfãs:
 
