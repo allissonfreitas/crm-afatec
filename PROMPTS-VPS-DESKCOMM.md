@@ -576,15 +576,18 @@ PASSO 2-F — Dump separado das tabelas com dado, nomeado de forma óbvia, para 
 zapmax local sem garimpar dentro do dump grande. Ajuste a lista `-t` para as tabelas que o
 PASSO 2-D mostrou com linhas:
 
+  ARQ=/opt/backups/zapmax-tabelas-com-dado-$(date +%Y%m%d-%H%M).sql
   docker exec supabase-db pg_dump -U postgres -d postgres \
     -t public.tenants -t public.tenant_members -t public.subscriptions \
     -t public.roadmap_items -t public.profiles -t public.whatsapp_instances \
     -t public.plans -t public.system_settings -t public.user_roles \
     -t public.floating_button_settings \
-    > /opt/backups/zapmax-tabelas-com-dado-$(date +%Y%m%d-%H%M).sql
-  grep -c "^COPY public\." /opt/backups/zapmax-tabelas-com-dado-*.sql | tail -1
+    > "$ARQ"
+  ls -l "$ARQ"
+  grep -c '^COPY public\.' "$ARQ"
 
-  A contagem de blocos COPY tem que bater com o número de tabelas que você passou no -t.
+  A contagem de blocos COPY tem que dar 10, o número de tabelas passadas no -t. Se der
+  menos, alguma tabela não entrou no dump — pare antes do PASSO 3.
 
 PASSO 3 — Esvaziar o public de tabelas, preservando schema, dono, grants e extensões.
 O comando é gerado a partir do catálogo, não de lista digitada:
@@ -648,6 +651,13 @@ PASSO 6 — Reinstalar:
   Os segredos que o instalador gerou na primeira tentativa já estão no .env e serão
   reaproveitados. Se ele parar de novo, PARE e me mostre a mensagem inteira, com as 20
   linhas anteriores ao erro — não tente contornar.
+
+  O QUE OBSERVAR NA SAÍDA: o instalador decide entre "banco novo" e "banco existente"
+  olhando se public.organizations existe (install.sh:1804). Com o public limpo, ele tem
+  que entrar no modo novo, que é o estrito (ON_ERROR_STOP) — a linha esperada é
+  "✓ schema aplicado". Se aparecer "schema já existe — re-aplicando em modo update", o
+  PASSO 3 não limpou de verdade: PARE, porque nesse modo os erros são engolidos como
+  "esperados" e o schema sairia pela metade sem ninguém avisar.
 
 PASSO 7 — Conferir o banco depois que o baseline passar:
 
