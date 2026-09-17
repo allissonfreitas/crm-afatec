@@ -513,18 +513,78 @@ SQL
       `unaccent` e `vector` — e as quatro vão FICAR lá.
 
 PASSO 2-D — Última olhada no que vai embora. Nenhuma tabela com linha deve sumir sem você
-ter visto o número antes:
+ter visto o número antes.
+
+⚠️ **Contagem EXATA, nunca `n_live_tup`.** `pg_stat_user_tables.n_live_tup` é estimativa do
+coletor de estatísticas: tabela nunca analisada aparece com 0 mesmo cheia de dados. Uma
+guarda contra perda de dados baseada em estimativa dá luz verde falsa — foi o que aconteceu
+em 17/09/2026, quando a estimativa disse "tudo zerado" e a contagem real achou 110 linhas
+em 10 tabelas do zapmax. Use esta, que conta de verdade:
 
   docker exec -i supabase-db psql -U postgres -d postgres <<'SQL'
-  select relname as tabela, n_live_tup as linhas_estimadas
-    from pg_stat_user_tables
-   where schemaname = 'public'
-   order by n_live_tup desc, relname;
+  select t.table_name as tabela,
+         (xpath('/row/cnt/text()',
+                query_to_xml(format('select count(*) as cnt from public.%I', t.table_name),
+                             false, true, '')))[1]::text::bigint as linhas
+    from information_schema.tables t
+   where t.table_schema = 'public' and t.table_type = 'BASE TABLE'
+   order by 2 desc, 1;
 SQL
 
-  Me mostre a saída inteira. O esperado é 43 tabelas com zero ou quase zero linhas (o
-  zapmax está liberado e há dump em /opt/backups). Se alguma aparecer com volume que você
-  não esperava, PARE e me avise antes do PASSO 3.
+  Me mostre a saída inteira. **Qualquer tabela com linha > 0 é parada obrigatória** até eu
+  confirmar que aquele dado pode ir embora. Não conclua nada de tabela vazia sem ter rodado
+  esta consulta.
+
+  Nota sobre a contagem de objetos: `information_schema.tables` conta views,
+  `pg_tables` não. Se um número der 43 e o outro 42, a diferença é a view
+  `ai_provider_credentials_safe`, resíduo do baseline parcial — ela cai pelo cascade junto
+  com `ai_provider_credentials`. O laço do PASSO 3 reporta o número de `pg_tables`.
+
+PASSO 2-E — Antes de remover qualquer tabela do zapmax, provar que nenhum outro app
+depende dela. `public.profiles` e `public.user_roles` têm cara de compartilhado, e o
+`auth.users` é um só para todos os apps:
+
+  docker exec -i supabase-db psql -U postgres -d postgres <<'SQL'
+  -- 1) gatilhos que RESTAM em auth.users e as funções que eles chamam
+  select t.tgname, n.nspname as schema_da_funcao, p.proname
+    from pg_trigger t
+    join pg_proc p on p.oid = t.tgfoid
+    join pg_namespace n on n.oid = p.pronamespace
+   where t.tgrelid = 'auth.users'::regclass and not t.tgisinternal;
+
+  -- 2) o corpo dessas funções: alguma escreve em public.profiles / public.user_roles?
+  select n.nspname, p.proname, pg_get_functiondef(p.oid) as corpo
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where p.prokind in ('f','p')
+     and p.oid in (select tgfoid from pg_trigger
+                    where tgrelid = 'auth.users'::regclass and not tgisinternal);
+
+  -- 3) os outros apps têm tabela própria de perfil/usuário, ou dependem da do public?
+  select table_schema, table_name
+    from information_schema.tables
+   where table_schema in ('ianews','carrossel','afatecpay','crm')
+     and table_name ~ 'profile|perfil|usuario|user|role'
+   order by 1, 2;
+SQL
+
+  LEITURA: se algum gatilho de ianews, carrossel ou afatecpay escrever em `public.profiles`
+  ou `public.user_roles`, essas duas tabelas **não podem** ir embora sem conversa — pare e
+  me mostre. Se cada app tiver a sua própria, o `public` é só do zapmax e o caminho está
+  livre.
+
+PASSO 2-F — Dump separado das tabelas com dado, nomeado de forma óbvia, para você levar ao
+zapmax local sem garimpar dentro do dump grande. Ajuste a lista `-t` para as tabelas que o
+PASSO 2-D mostrou com linhas:
+
+  docker exec supabase-db pg_dump -U postgres -d postgres \
+    -t public.tenants -t public.tenant_members -t public.subscriptions \
+    -t public.roadmap_items -t public.profiles -t public.whatsapp_instances \
+    -t public.plans -t public.system_settings -t public.user_roles \
+    -t public.floating_button_settings \
+    > /opt/backups/zapmax-tabelas-com-dado-$(date +%Y%m%d-%H%M).sql
+  grep -c "^COPY public\." /opt/backups/zapmax-tabelas-com-dado-*.sql | tail -1
+
+  A contagem de blocos COPY tem que bater com o número de tabelas que você passou no -t.
 
 PASSO 3 — Esvaziar o public de tabelas, preservando schema, dono, grants e extensões.
 O comando é gerado a partir do catálogo, não de lista digitada:
@@ -544,7 +604,8 @@ O comando é gerado a partir do catálogo, não de lista digitada:
   select nspname, nspowner::regrole as dono from pg_namespace where nspname='public';
 SQL
 
-  Esperado: "tabelas removidas: 43", tabelas_restantes_no_public = 0, as **quatro**
+  Esperado: "tabelas removidas: 42" (`pg_tables` não conta a view), o
+  tabelas_restantes_no_public = 0, as **quatro**
   extensões ainda listadas (citext, pg_trgm, unaccent, vector) e o public com o dono
   intacto. Se vierem só três, algo saiu errado — pare e me avise.
 
