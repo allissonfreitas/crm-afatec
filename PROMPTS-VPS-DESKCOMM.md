@@ -679,7 +679,13 @@ CRM e nenhuma do zapmax, policies acima de zero, e os contêineres de pé.
 
 ---
 
-## Bloco 3 — Instalar o DeskcommCRM (modo não-interativo)
+## Bloco 3 — Instalar o DeskcommCRM (modo não-interativo) ✅ NO AR em 17/09/2026
+
+> Instalado na segunda tentativa, depois do Bloco 2-C. `https://crm.afatec.net` responde com
+> certificado válido, login validado de ponta a ponta pelo Kong, 6 contêineres somando
+> ~800 MB e a VPS com os mesmos 8,3 Gi disponíveis de antes. Blocos 4 e 5 ficaram cobertos
+> pela própria verificação da instalação. **Bloco 6 adiado** até haver um chip diferente do
+> Agente Express.
 
 O instalador tem um modo interativo que faz perguntas, e um modo `--yes` que lê tudo de um
 `.env` preenchido antes. **Por SSH usamos o `--yes`** — não há terminal para responder as
@@ -887,8 +893,9 @@ desenhado em qualquer tela. Não é escondido: deixa de existir na saída.
        curl -s "https://crm.afatec.net$u" | grep -c Deskcomm
      done
 
-   Esperado: o `<title>` começa com "AfatecCRM", o manifesto traz
-   `"name":"AfatecCRM"`, o /icon devolve PNG, e a varredura devolve `0` nas três.
+   Esperado: o `<title>` começa com "AfatecCRM", o /icon devolve PNG, e a varredura
+   devolve `0` em `/` e `/login`. O **manifesto é a exceção conhecida**: vem com o nome
+   antigo porque está congelado no build (ver a correção logo abaixo da tabela).
 ```
 
 ### O que o `APP_NAME` já cobre sozinho
@@ -899,7 +906,7 @@ Conferido linha a linha na v1.28.0 que vamos instalar:
 |---|---|---|
 | Título de toda aba (`AfatecCRM — …` e `Inbox · AfatecCRM`) | `app/layout.tsx:80` | sim |
 | Favicon da aba (ladrilho com a inicial na cor da marca) | `app/icon.tsx` | sim |
-| Nome do PWA / atalho no celular | `app/manifest.ts` | sim |
+| Nome do PWA / atalho no celular | `app/manifest.ts` | **NÃO** — ver abaixo |
 | Barra lateral, aberta e recolhida | `components/shell/Sidebar.tsx` | sim |
 | Barra lateral do admin da plataforma | `components/admin/AdminSidebar.tsx` | sim |
 | Tela de login e fachada pública | `app/(public)/layout.tsx` | sim |
@@ -907,6 +914,16 @@ Conferido linha a linha na v1.28.0 que vamos instalar:
 | Logotipo desenhado do produto | `lib/branding/desenho.ts` | some da tela |
 | E-mails de convite, MFA e LGPD | `lib/branding/saida.ts` | sim |
 | PDF de resposta LGPD | `lib/lgpd/pdf-renderer.tsx` | sim |
+
+**Correção medida na VPS em 17/09/2026:** o `manifest.webmanifest` continua com o nome
+antigo mesmo com `APP_NAME=AfatecCRM`. Eu tinha escrito que ele lia a marca em runtime, e o
+código até lê (`marcaDaSaida(null)`) — mas `app/manifest.ts` **não declara
+`export const dynamic = "force-dynamic"`**, então o Next o congela no `next build`, com a
+marca de quem buildou a imagem. É exatamente a armadilha que o cabeçalho de `app/icon.tsx`
+descreve e da qual o próprio ícone se protege; o manifesto ficou de fora. Efeito prático:
+só o nome do atalho ao instalar como PWA no celular. Conserto definitivo e grátis: uma
+linha no projeto de origem — vale abrir uma issue/PR em `melgarafael/DeskcommCRM`, que
+corrige para todo mundo e chega aqui na próxima atualização de imagem.
 
 Além disso o produto tem **duas telas** para trocar isso depois sem mexer em arquivo:
 **Admin da plataforma › Marca da instalação** e **Configurações › Marca**. O que é
@@ -1000,7 +1017,11 @@ Evolution, n8n e o CRM antigo todos `Up`.
 
 ---
 
-## Bloco 6 — Entrar e conectar o WhatsApp
+## Bloco 6 — Entrar e conectar o WhatsApp ⏸ ADIADO em 17/09/2026 (falta um chip)
+
+> O onboarding tem o botão **"Pular por enquanto"** na tela do WhatsApp
+> (`app/onboarding/connect-whatsapp/_client.tsx:193`), então dá para entrar, montar funil,
+> campos e equipe, e conectar o número depois em Conexões, sem reinstalar nada.
 
 1. Abra `https://crm.afatec.net` e entre com o e-mail e a senha de admin do Bloco 3.
 2. O onboarding vai pedir para conectar o WhatsApp por QR code.
